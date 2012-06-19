@@ -21,6 +21,11 @@ const float GRAVITY = 3000.0; //pixels per second per second
 const int FPS_CAP = 5; // if FLIP isn't vsynced, limit to this so we don't waste cycles
 const float SLOW_DOWN = 2.0;
 
+Tmx::Map *map;
+std::map<std::string, SDL_Surface*> tilesets;
+
+// ********** global funcs ************
+
 struct sprite_frame {
     SDL_Rect rect;
     float duration; //s
@@ -30,6 +35,45 @@ struct animation {
     struct sprite_frame *frames;
     int count;
 };
+
+template <typename T> int sgn(T val) {
+    return (T(0) < val) - (val < T(0));
+}
+
+
+SDL_Rect calculate_viewport( int x, int y, int w, int h ) {
+    SDL_Rect r;
+    if( w < SCREEN_WIDTH || h < SCREEN_HEIGHT ) {
+        // centre it
+        if( w < SCREEN_WIDTH ) {
+            r.x = ( w - SCREEN_WIDTH ) / 2;
+        }
+        if( h < SCREEN_HEIGHT ) {
+            r.y = ( h - SCREEN_HEIGHT ) / 2;
+        }
+        r.w = w;
+        r.h = h;
+        return r;
+    } else {
+        r.w = SCREEN_WIDTH;
+        r.h = SCREEN_HEIGHT;
+        r.x = x - SCREEN_WIDTH / 2;
+        r.y = y - SCREEN_HEIGHT / 2;
+        if( r.x < 0 ) {
+            r.x = 0;
+        }
+        if( r.x + r.w > w ) {
+            r.x = w - r.w;
+        }
+        if( r.y < 0 ) {
+            r.y = 0;
+        }
+        if( r.y + r.h > h ) {
+            r.y = h - r.h;
+        }
+        return r;
+    }
+}
 
 SDL_Surface *load_image( std::string filename ) {
 	SDL_Surface *loadedImage = NULL;
@@ -91,6 +135,303 @@ void apply_tiling_surface( int x, int y, int width, int x_offset, SDL_Surface *s
 	}
 }
 
+void load_map() {
+    map = new Tmx::Map();
+	map->ParseFile("map/platformtest.tmx");
+
+	if (map->HasError()) {
+        //printf("error code: %d\n", map->GetErrorCode());
+	    //printf("error text: %s\n", map->GetErrorText().c_str());
+		system("PAUSE");
+        exit(1);
+	}
+
+	for (int i = 0; i < map->GetNumTilesets(); ++i) {
+		// Get a tileset.
+		const Tmx::Tileset *tileset = map->GetTileset(i);
+		tilesets[ tileset->GetImage()->GetSource() ] = load_image( ( "map/" + tileset->GetImage()->GetSource() ).c_str() );
+	}
+
+}
+
+int tile_is_solid( const Tmx::Tile *tile ) {
+    return ( tile->GetProperties().GetLiteralProperty( "solid" ) == "1" );
+}
+
+int level_is_solid_here( const Tmx::Layer *layer, int col, int row ) {
+    int tile_id = layer->GetTileId( col, row );
+    if( tile_id ) {
+        const Tmx::Tileset *tileset = map->FindTileset(tile_id);
+        const Tmx::Tile *tile = tileset->GetTile(tile_id);
+        if( tile ) {
+            // not sure why a tileid wouldn't resolve to a tile...
+            if( tile_is_solid( tile ) ) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+int map_is_solid_here( int col, int row ) {
+    for (int i = map->GetNumLayers() - 1; i >= 0; i--) {
+        const Tmx::Layer *layer = map->GetLayer(i);
+        if( level_is_solid_here( layer, col, row ) ) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+//
+// return d_ti time to impact
+float intersect_with_vertical(
+    float x0, float y0, float dx, float dy, float dt,
+    float a0, float b0, float a1, float b1
+) {
+    if( a1 != a0 ) {
+        fprintf( stderr, "woops line is not vertical\n");
+        exit(1);
+    }
+    if( x0 <= a0 && a0 < x0 + dx*dt ) {
+        float j = y0 + ( dy / dx * (a0 - x0) );
+        if( b0 < j && j < b1 ) {
+            return (a0 - x0) / dx;
+        }
+    }
+    // no intersection
+    return -1.0f;
+}
+float intersect_with_horizontal(
+    float x0, float y0, float dx, float dy, float dt,
+    float a0, float b0, float a1, float b1
+) {
+    if( b1 != b0 ) {
+        fprintf( stderr, "woops line is not vertical\n");
+        exit(1);
+    }
+    if( y0 <= b0 && b0 < y0 + dy*dt ) {
+        float j = x0 + ( dx / dy * (b0 - y0) );
+        if( a0 < j && j < a1 ) {
+            return (b0 - y0) / dy;
+        }
+    }
+    // no intersection
+    return -1.0f;
+}
+
+// iterate blocks in quadrants
+// if dx and dy both > 0, analyse top right quadrant
+// use of sgn(0) == 0 means special case dx or dy == 0 results in horizontal line
+float find_intersection_with_solid(
+    float x, float y,
+    float dx, float dy,
+    float dt
+) {
+    int col = x / map->GetTileWidth();
+    int row = y / map->GetTileWidth();
+    printf( "corner col: %i, %i\n", col, row );
+    int colinc = std::copysign( 1, dx );
+    int rowinc = std::copysign( 1, dy );
+    for(
+        int blockdist = 1;
+        //blockdist <= std::max( 1, (int)(2 * dt * (abs(dx) + abs(dy)) / map->GetTileWidth()) );
+        blockdist <= 3;
+        blockdist++
+    ) {
+        //printf( "blockdist: %i\n", blockdist );
+        int rc = row;
+        for(
+            int cc = col + (colinc * blockdist);
+            cc + colinc != col;
+            cc -= colinc
+        ) {
+            printf( "  cc: %i\n", cc );
+            /*for(
+                int rc = row;
+                rc != row + (rowinc * blockdist);
+                rc += rowinc
+            )*/ {
+                printf( "  rc: %i\n", rc );
+                float intersect = -1.0;
+                if( map_is_solid_here( cc, rc ) ) {
+                    if( dx > 0 ) {
+                        // left edge
+                        intersect = intersect_with_vertical(
+                            x, y, dx, dy, dt,
+                            cc * map->GetTileWidth(),
+                            rc * map->GetTileHeight(),
+                            cc * map->GetTileWidth(),
+                            (rc + 1) * map->GetTileHeight()
+                        );
+                        if( intersect >= 0.0 ) {
+                            return intersect;
+                        }
+                    }
+                    if( dx < 0 ) {
+                        // right edge
+                        intersect = intersect_with_vertical(
+                            x, y, dx, dy, dt,
+                            (cc + 1) * map->GetTileWidth(),
+                            rc * map->GetTileHeight(),
+                            (cc + 1) * map->GetTileWidth(),
+                            (rc + 1) * map->GetTileHeight()
+                        );
+                        if( intersect >= 0.0 ) {
+                            return intersect;
+                        }
+                    }
+                    if( dy > 0 ) {
+                        // top edge
+                        intersect = intersect_with_horizontal(
+                            x, y + 1, dx, dy, dt,
+                            cc * map->GetTileWidth(),
+                            rc * map->GetTileHeight(),
+                            (cc + 1) * map->GetTileWidth(),
+                            rc * map->GetTileHeight()
+                        );
+                        printf( "%f, %f - %i, %i : %f\n", x/map->GetTileWidth(), y/map->GetTileWidth(), cc, rc, intersect );
+                        if( intersect >= 0.0 ) {
+                            printf( "boom \n" );
+                            return intersect;
+                        }
+                    }
+                    if( dy < 0 ) {
+                        // bottom edge
+                        intersect = intersect_with_horizontal(
+                            x, y, dx, dy, dt,
+                            cc * map->GetTileWidth(),
+                            (rc + 1) * map->GetTileHeight(),
+                            (cc + 1) * map->GetTileWidth(),
+                            (rc + 1) * map->GetTileHeight()
+                        );
+                        if( intersect >= 0.0 ) {
+                            return intersect;
+                        }
+                    }
+                }
+            }
+            rc += rowinc;
+        }
+    }
+    return -1.0;
+}
+
+// returns the next solid block below
+int find_surface_down( int x, int y ) {
+    int col = x / map->GetTileWidth();
+    for( int level = y / map->GetTileHeight(); level < map->GetHeight(); level ++ ) {
+        for (int i = map->GetNumLayers() - 1; i >= 0; i--) {
+            const Tmx::Layer *layer = map->GetLayer(i);
+            if( col < 0 || col >= layer->GetWidth() || level < 0 || level > layer->GetHeight() ) {
+                continue;
+            }
+            if( level_is_solid_here( layer, col, level ) ) {
+                return level * map->GetTileHeight();
+            }
+        }
+    }
+    // bottom of map
+    return map->GetHeight() * map->GetTileHeight();
+}
+
+// returns the next solid block below
+int find_surface_up( int x, int y ) {
+    int col = x / map->GetTileWidth();
+    for( int level = y / map->GetTileHeight(); level >= 0; level -- ) {
+        for (int i = map->GetNumLayers() - 1; i >= 0; i--) {
+            const Tmx::Layer *layer = map->GetLayer(i);
+            if( col < 0 || col >= layer->GetWidth() || level < 0 || level > layer->GetHeight() ) {
+                continue;
+            }
+            if( level_is_solid_here( layer, col, level ) ) {
+                return level * map->GetTileHeight();
+            }
+        }
+    }
+    // bottom of map
+    return map->GetHeight() * map->GetTileHeight();
+}
+
+const Tmx::Tile *get_tile_by_coords( int x, int y ) {
+    int col = x / map->GetTileWidth();
+    int row = y / map->GetTileHeight();
+    for (int i = map->GetNumLayers() - 1; i >= 0; i--) {
+        const Tmx::Layer *layer = map->GetLayer(i);
+        if( col < 0 || col >= layer->GetWidth() || row < 0 || row > layer->GetHeight() ) {
+            continue;
+        }
+        int tile_id = layer->GetTileId( col, row );
+        if( tile_id > 0 ) {
+            const Tmx::Tileset *tileset = map->FindTileset(tile_id);
+            const Tmx::Tile *tile = tileset->GetTile(tile_id);
+            if( tile ) {
+                return tile;
+            }
+        }
+    }
+    return NULL;
+}
+
+
+SDL_Surface *init_background() {
+    // create surface for background using default bit masks
+    return SDL_CreateRGBSurface( SDL_HWSURFACE, map->GetWidth() * TW, map->GetHeight() * TH, 32, 0, 0, 0, 0 );
+}
+
+int render_map( int v_x, int v_y, SDL_Surface *destination ) {
+                //Tmx::Tile *tile = *(tileset->GetTiles().begin());
+                //tile_is_solid( tile )
+
+	// Iterate through the layers.
+    // test std::min( 0, 4 );
+
+    for (int y = 0; y < map->GetHeight(); ++y) {
+        for (int x = 0; x < map->GetWidth(); ++x) {
+            // iterate in reverse so we get top layer first
+            for (int i = map->GetNumLayers() - 1; i >= 0; i--) {
+                const Tmx::Layer *layer = map->GetLayer(i);
+                int tile_id = layer->GetTileId(x, y);
+                if( tile_id ) {
+                    const Tmx::Tileset *tileset = map->FindTileset(tile_id);
+                    const Tmx::Tile *tile = tileset->GetTile(tile_id);
+                    if( tile ) {
+                        // not sure why a tileid wouldn't resolve to a tile...
+                        if( tile_is_solid( tile ) ) {
+                            // TODO
+                        } else {
+                            // TODO
+                        }
+                    } else {
+                        // we have to construct a tile ourselves!
+                        // TODO
+                    }
+                    // This is all very shit - TODO modify TmxParser to calculate this crap for you
+                    // TODO margin and spacing compensation
+                    int tileset_cols = tileset->GetImage()->GetWidth() / tileset->GetTileWidth();
+                    int tileset_rows = tileset->GetImage()->GetHeight() / tileset->GetTileHeight();
+                    int tile_index = tile_id;
+                    int col = ( tile_index % tileset_cols );
+                    int row = ( tile_index / tileset_cols );
+                    apply_tile(
+                        col * ( tileset->GetSpacing() + tileset->GetTileWidth() ) + tileset->GetMargin(),
+                        row * ( tileset->GetSpacing() + tileset->GetTileHeight() ) + tileset->GetMargin(),
+                        tilesets[ tileset->GetImage()->GetSource() ], x * TW, y * TH, destination
+                    );
+                    //we only really care about the top tile for now
+                    break;
+                } else {
+                    //Nuffin 'ere at all
+                }
+            }
+        }
+	}
+
+    return 1;
+}
+
+// ************* Sprite classes ******************8
+
 class Sprite {
     public:
 	    float x;
@@ -142,22 +483,47 @@ class NinjaPlayer: public Sprite {
 
         void walk();
         void run();
-        void jump( int time, int floor );
+        void jump( int time, int floor_left, int floor_right );
         void left( float tdelta );
         void right( float tdelta );
 
         void updateKinematics( float tdelta );
         SDL_Rect getCurrentFrame();
+        // find if we're overlapping a tile while travelling
+        void collision();
+
+        int xleft() { return (int)x; }
+        int xright() { return (int)x+fr_w; }
+        int ytop() { return (int)y; }
+        int ybottom() { return (int)y+fr_h; }
+        int set_xleft( int nx ) { x = (float)nx; }
+        int set_xright( int nx ) { x = (float)(nx - fr_w); }
+        int set_ytop( int ny ) { y = (float)ny; }
+        int set_ybottom( int ny ) { y = (float)( ny - fr_h ); }
+
+        int map_collisions( float dt );
+
+        short fr_w;
+        short fr_h;
 
 };
+
+void NinjaPlayer::collision() {
+    if( dx > 0 ) {
+    }
+}
+
 NinjaPlayer::NinjaPlayer() {
     frame_count = 0;
     last_frame_timer = 0.0;
     frame_timer = 0.0;
 
+    fr_w = 42;
+    fr_h = 50;
+
     dx = 0.0;
     dy = 0.0;
-    jump_dy = -800.0; // -900.0// initial jump velocity
+    jump_dy = -500.0; // -900.0// initial jump velocity
     run_ddx = 4000.0; //3000.0; // p/s^2
 
     walkspeed = 400.0; // p/s^2
@@ -245,7 +611,7 @@ SDL_Rect NinjaPlayer::getCurrentFrame() {
     return animations[ current_animation ].frames[ frame_count ].rect;    
 }
 // floor = last place you were standing
-void NinjaPlayer::jump( int time, int floor ) {
+void NinjaPlayer::jump( int time, int floor_left, int floor_right ) {
     if( jump_powering == true ) {
         if( time >= jump_start + jump_power_time ) {
             // finish jump power phase
@@ -254,7 +620,7 @@ void NinjaPlayer::jump( int time, int floor ) {
             // keep powering
             dy = jump_dy * ( 1.0 - (time - jump_start ) / jump_power_time );
         }
-    } else if( y == floor ) {
+    } else if( ybottom() == floor_left || ybottom() == floor_right ) {
         // start jump power phase
         dy = jump_dy;
         jump_powering = true;
@@ -268,144 +634,93 @@ void NinjaPlayer::right( float tdelta ) {
     dx += tdelta * run_ddx;
 }
 
-Tmx::Map *map;
-std::map<std::string, SDL_Surface*> tilesets;
+struct contact {
+    float t2i; // time to impact
+    float rx; //normal to surface
+    float ry; //normal to surface
+};
 
-void load_map() {
-    map = new Tmx::Map();
-	map->ParseFile("map/platformtest.tmx");
+// return 1 if this sprite impacts a solid map block
+// on current trajectory and updates internal dx,dy to truncate
+// trajectory so it rests against block next frame
+int NinjaPlayer::map_collisions( float dt ) {
+    // time to impact
+    // -1.0 special no-impact value
+    float t2i = -1.0;
 
-	if (map->HasError()) {
-		printf("error code: %d\n", map->GetErrorCode());
-		printf("error text: %s\n", map->GetErrorText().c_str());
-		system("PAUSE");
-        exit(1);
-	}
+    printf( "--\n\n" );
 
-	for (int i = 0; i < map->GetNumTilesets(); ++i) {
-		// Get a tileset.
-		const Tmx::Tileset *tileset = map->GetTileset(i);
-		tilesets[ tileset->GetImage()->GetSource() ] = load_image( ( "map/" + tileset->GetImage()->GetSource() ).c_str() );
-	}
-
-}
-
-int tile_is_solid( const Tmx::Tile *tile ) {
-    return ( tile->GetProperties().GetLiteralProperty( "solid" ) == "1" );
-}
-
-// returns the next solid block below
-int get_floor_below( int x, int y ) {
-    int col = x / map->GetTileWidth();
-    for( int level = y / map->GetTileHeight(); level < map->GetHeight(); level ++ ) {
-        for (int i = map->GetNumLayers() - 1; i >= 0; i--) {
-            const Tmx::Layer *layer = map->GetLayer(i);
-            if( col < 0 || col >= layer->GetWidth() || level < 0 || level > layer->GetHeight() ) {
-                continue;
-            }
-            int tile_id = layer->GetTileId( col, level );
-            if( tile_id ) {
-                const Tmx::Tileset *tileset = map->FindTileset(tile_id);
-                const Tmx::Tile *tile = tileset->GetTile(tile_id);
-                if( tile ) {
-                    // not sure why a tileid wouldn't resolve to a tile...
-                    if( tile_is_solid( tile ) ) {
-                        return level * map->GetTileHeight();
-                    }
-                }
-            }
+    // top left corner
+    if( dy < 0 || dx < 0 ) {
+        printf( "top left\n" );
+        float new_t2i = find_intersection_with_solid(
+            xleft(), ytop(), dx, dy, dt
+        );
+        // will we impact something sooner on this corner?
+        //if( new_t2i >= 0.0 && new_t2i < t2i ) {
+            // optimised ;-)
+            t2i = new_t2i;
+        //}
+    }
+    // top right corner
+    if( dy < 0 || dx > 0 ) {
+        printf( "top right\n" );
+        float new_t2i = find_intersection_with_solid(
+            xright(), ytop(), dx, dy, dt
+        );
+        // will we impact something sooner on this corner?
+        if( new_t2i >= 0.0 && ( new_t2i < t2i || t2i < 0.0 ) ) {
+            t2i = new_t2i;
         }
     }
-    // bottom of map
-    return map->GetHeight() * map->GetTileHeight();
-}
-
-const Tmx::Tile *get_tile_by_coords( int x, int y ) {
-    int col = x / map->GetTileWidth();
-    int row = y / map->GetTileHeight();
-    for (int i = map->GetNumLayers() - 1; i >= 0; i--) {
-        const Tmx::Layer *layer = map->GetLayer(i);
-        if( col < 0 || col >= layer->GetWidth() || row < 0 || row > layer->GetHeight() ) {
-            continue;
-        }
-        int tile_id = layer->GetTileId( col, row );
-        if( tile_id > 0 ) {
-            const Tmx::Tileset *tileset = map->FindTileset(tile_id);
-            const Tmx::Tile *tile = tileset->GetTile(tile_id);
-            if( tile ) {
-                return tile;
-            }
+    // bottom right corner
+    if( dy > 0 || dx > 0 ) {
+        printf( "bottom right\n" );
+        float new_t2i = find_intersection_with_solid(
+            xright(), ybottom(), dx, dy, dt
+        );
+        // will we impact something sooner on this corner?
+        if( new_t2i >= 0.0 && ( new_t2i < t2i || t2i < 0.0 ) ) {
+            t2i = new_t2i;
         }
     }
-    return NULL;
-}
-
-
-SDL_Surface *init_background() {
-    // create surface for background using default bit masks
-    return SDL_CreateRGBSurface( SDL_HWSURFACE, map->GetWidth() * TW, map->GetHeight() * TH, 32, 0, 0, 0, 0 );
-}
-
-int render_map( int v_x, int v_y, SDL_Surface *destination ) {
-                //Tmx::Tile *tile = *(tileset->GetTiles().begin());
-                //tile_is_solid( tile )
-
-	// Iterate through the layers.
-    // test std::min( 0, 4 );
-
-    for (int y = 0; y < map->GetHeight(); ++y) {
-        for (int x = 0; x < map->GetWidth(); ++x) {
-            // iterate in reverse so we get top layer first
-            for (int i = map->GetNumLayers() - 1; i >= 0; i--) {
-                const Tmx::Layer *layer = map->GetLayer(i);
-                int tile_id = layer->GetTileId(x, y);
-                if( tile_id ) {
-                    const Tmx::Tileset *tileset = map->FindTileset(tile_id);
-                    const Tmx::Tile *tile = tileset->GetTile(tile_id);
-                    if( tile ) {
-                        // not sure why a tileid wouldn't resolve to a tile...
-                        if( tile_is_solid( tile ) ) {
-                            // TODO
-                        } else {
-                            // TODO
-                        }
-                    } else {
-                        // we have to construct a tile ourselves!
-                        // TODO
-                    }
-                    // This is all very shit - TODO modify TmxParser to calculate this crap for you
-                    // TODO margin and spacing compensation
-                    int tileset_cols = tileset->GetImage()->GetWidth() / tileset->GetTileWidth();
-                    int tileset_rows = tileset->GetImage()->GetHeight() / tileset->GetTileHeight();
-                    int tile_index = tile_id;
-                    int col = ( tile_index % tileset_cols );
-                    int row = ( tile_index / tileset_cols );
-                    apply_tile(
-                        col * ( tileset->GetSpacing() + tileset->GetTileWidth() ) + tileset->GetMargin(),
-                        row * ( tileset->GetSpacing() + tileset->GetTileHeight() ) + tileset->GetMargin(),
-                        tilesets[ tileset->GetImage()->GetSource() ], x * TW, y * TH, destination
-                    );
-                    //we only really care about the top tile for now
-                    break;
-                } else {
-                    //Nuffin 'ere at all
-                }
-            }
+    // bottom left corner
+    if( dy > 0 || dx < 0 ) {
+        printf( "bottom left\n" );
+        float new_t2i = find_intersection_with_solid(
+            xleft(), ybottom(), dx, dy, dt
+        );
+        // will we impact something sooner on this corner?
+        if( new_t2i >= 0.0 && ( new_t2i < t2i || t2i < 0.0 ) ) {
+            t2i = new_t2i;
         }
-	}
-
-    return 1;
+    }
+    // if there's an impact, truncate our trajectory
+    if( t2i >= 0.0 ) {
+        dx = floor( dx * t2i / dt );
+        dy = floor( dy * t2i / dt );
+        // collision flag
+        printf( "bang\n" );
+        return 1;
+    }
+    return 0;
 }
+
+
+
+
+// ***************** entry point *******************
 
 int main( int argc, char **argv ) {
 
-  
-	//The images
+	SDL_Surface *screen = NULL;
+	//The layers
 	SDL_Surface *message = NULL;
 	SDL_Surface *background = NULL;
-	SDL_Surface *screen = NULL;
+
 	SDL_Surface *msg = NULL;
 	SDL_Event event;
+
 	bool quit = false;
 	int last_time;
 	int time = 0;
@@ -440,6 +755,7 @@ int main( int argc, char **argv ) {
 
 	float dynamic_friction = 12.00; // 1/s
 	float static_friction = 12.0; // p/s^2
+
 	// distances are pixels
 	int lc = 0;
 	float tdelta = 0;
@@ -450,6 +766,7 @@ int main( int argc, char **argv ) {
 
     // init last_time or it goes mental
     last_time = SDL_GetTicks();
+
 	while( !quit ) {
 
 		time = SDL_GetTicks();
@@ -457,9 +774,7 @@ int main( int argc, char **argv ) {
 		last_time = time;
 		
 		if( SDL_PollEvent( &event ) ) {
-			//If a key was pressed
 			if( event.type == SDL_KEYDOWN ) {
-				//Set the proper message surface
 				switch( event.key.keysym.sym ) {
 					case SDLK_ESCAPE:
 						quit = true;
@@ -478,16 +793,85 @@ int main( int argc, char **argv ) {
 			player.walk();
 		}
 
-        int floor = get_floor_below( (int)player.x, (int)player.y );
-		if( keystates[ SDLK_UP ] ) {
-			player.jump( time, floor );
-		}
-		if( keystates[ SDLK_UP ] ) {
+        //int floor = find_surface_down( (int)player.x, (int)player.y );
+
+        // calculate the floor(s) beneath me
+        int floorl = find_surface_down( player.xleft(), player.ybottom() );
+        int floorr = find_surface_down( player.xright(), player.ybottom() );
+
+        // calculate blocks I will collide with on current path
+
+        // calculate is any of 4 lines from tl -> br will intersect a box
+        //
+        // for each corner
+        //   line is x0,y0 -> x+dx.t,y+dy.t = x1,x1
+        //
+        //   for each block
+        //     for each side t,r,b,l
+        //       if x0 >= x1 and x0 < x+dx.t
+        //         and by
+        //float ttt = 0.0;
+        //ttt = intersect_with_vertical( 1.0, 1.0, 0.3, 0.3, 10, 2.0, 1.0, 2.0, 4.0 );
+        //ttt = intersect_with_horizontal( 1.0, 1.0, 0.3, 0.3, 10, 1.0, 2.0, 5.0, 2.0 );
+        //
+        //
+
+        int touching = player.map_collisions( tdelta );
+        player.updateKinematics( tdelta );
+
+        //if( keystates[ SDLK_DOWN ] && player.dy == 0.0 ) {
+		//	player.y += 1.0;
+		//}
+
+		/*if( keystates[ SDLK_UP ] ) {
 			//y -= 1;
 		}
-		if( keystates[ SDLK_DOWN ] ) {
-			//y += 1;
+		*/
+
+        //const Tmx::Tile *tilel = get_tile_by_coords( player.xleft(), player.ybottom() );
+        //const Tmx::Tile *tiler = get_tile_by_coords( player.xright(), player.ybottom() );
+
+        // correct for collisions
+
+        /*if( tilel && player.dy > 0 ) {
+            if( tile_is_solid( tilel ) ) {
+                // move to top of tile
+                player.y = ( player.y / map->GetTileHeight() ) * map->GetTileHeight();
+                //player.y = floorl;
+                player.dy = 0;
+            }
+        } else if( tiler && player.dy > 0 ) {
+            if( tile_is_solid( tiler ) ) {
+                // move to top of tile
+                player.y = ( player.y / map->GetTileHeight() ) * map->GetTileHeight();
+                //player.y = floorr;
+                player.dy = 0;
+            }
+        } else {
+            if( player.ybottom() <= floorl && player.ybottom() <= floorr ) {
+                printf( "creep\n" );
+            }
+        }*/
+
+		if( keystates[ SDLK_UP ] ) {
+			player.jump( time, floorl, floorr );
 		}
+
+        //printf( "Player: %i, Floorl: %i, Floorr: %i\n", (int)player.ybottom(), floorl, floorr );
+        // have I fallen through the surface of a solid tile?
+
+        /*if( player.ybottom() >= floorl && player.dy > 0.0 ) {
+            player.set_ybottom( floorl );
+            player.dy = 0;
+        } else if ( player.ybottom() >= floorr && player.dy > 0.0 ) {
+            player.set_ybottom( floorr );
+            player.dy = 0;
+        } else {
+            player.dy += tdelta * GRAVITY;
+        }*/
+        
+        player.dy += tdelta * GRAVITY;
+
 		if( keystates[ SDLK_LEFT ] ) {
             player.left( tdelta );
 		} else if( keystates[ SDLK_RIGHT ] ) {
@@ -505,41 +889,26 @@ int main( int argc, char **argv ) {
 			}
 		}
 
-        const Tmx::Tile *tile = get_tile_by_coords( player.x, player.y );
-        if( tile && player.dy > 0 ) {
-            if( tile_is_solid( tile ) ) {
-                // move to top of tile
-                player.y = ( player.y / map->GetTileHeight() ) * map->GetTileHeight();
-                player.dy = 0;
-            }
-        } else {
-            //if( player.y < floor ) {
-                player.dy += tdelta * GRAVITY;
-            //}
-        }
-
-        player.updateKinematics( tdelta );
-        if( player.y > floor ) {
-            player.y = floor;
-            player.dy = 0;
-        }
         player.animate( tdelta );
 
-		int bg_offset = (int)player.x % background->w;
+        SDL_Rect vp = calculate_viewport( (int)player.x, (int)player.y, map->GetWidth() * map->GetTileWidth(), map->GetHeight() * map->GetTileHeight() );
+        //printf( "%i, %i, %i, %i\n", vp.x, vp.y, map->GetWidth(), map->GetHeight() );
+
+		//int bg_offset = (int)player.x % background->w;
 		clear_surface( screen, 0xffffffff );
 		//apply_tiling_surface( 0, (int)floor, screen->w, 0/*bg_offset*/, background, screen );
-		apply_surface( 0, 0, background, screen );
+		apply_surface( 0-vp.x, 0-vp.y, background, screen );
 
         //SDL_Rect player_rect = player.frames[ player.current_animation[ player.frame_count ] ].rect;
         SDL_Rect player_rect = player.getCurrentFrame();;
 
-		apply_sprite( (int)player.x, (int)(player.y - player_rect.h), player.sprite_sheet, &player_rect, screen );
+		apply_sprite( (int)player.x - vp.x, (int)(player.y) - vp.y, player.sprite_sheet, &player_rect, screen );
 
         // use up remaining ticks before frame is done
         //if( tdelta < (1.0/(float)FPS_CAP) ) {
 		//    SDL_Delay( (int)( ( 1/(float)FPS_CAP - tdelta ) * 1000 ) );
         //}
-        //SDL_Delay( 200 ); // recommend to smooth things out
+        SDL_Delay( (int) ( 3 * pow( SLOW_DOWN, 2 ) ) ); // recommend to smooth things out
 		//msg = TTF_RenderText_Blended( font, formatter.str().c_str(), textColor );
 		//apply_surface( 400, 400, msg, screen );
 
@@ -556,3 +925,4 @@ int main( int argc, char **argv ) {
 	delete map;
 	return 0;
 }
+
