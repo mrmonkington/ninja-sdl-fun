@@ -9,6 +9,8 @@
 #include <vector>
 #include <stdarg.h>
 
+#include <Box2D.h>
+
 #include "TmxParser/Tmx.h"
 
 #ifdef DEBUG
@@ -22,6 +24,7 @@ inline void printf_debug( const char* f, ... ) {
 }
 #endif
 
+
 const int SCREEN_WIDTH = 640;
 const int SCREEN_HEIGHT = 480;
 const int SCREEN_BPP = 32;
@@ -31,10 +34,24 @@ const int SCREEN_FLAGS = SDL_HWSURFACE | SDL_DOUBLEBUF | SDL_ASYNCBLIT;// | SDL_
 const int FPSFPS = 10; // rate at which FPS display is updated
 const float GRAVITY = 3000.0; //pixels per second per second
 const int FPS_CAP = 5; // if FLIP isn't vsynced, limit to this so we don't waste cycles
-const float SLOW_DOWN = 5.0;
+const float SLOW_DOWN = 1.0;
+// pixels per metre
+const float SCALE = 25; // pixels per metre
 
 Tmx::Map *map;
 std::map<std::string, SDL_Surface*> tilesets;
+
+// SDL Stuff
+
+SDL_Surface *screen = NULL;
+
+// physics stuff
+
+inline int to_screen( float c ) {
+    return (int) ( c * SCALE );
+}
+
+b2World* world;
 
 // ********** global funcs ************
 
@@ -47,16 +64,6 @@ struct animation {
     struct sprite_frame *frames;
     int count;
 };
-struct contact {
-    float t2i; // time to impact
-    float rx; //normal to surface
-    float ry; //normal to surface
-};
-
-template <typename T> int sgn(T val) {
-    return (T(0) < val) - (val < T(0));
-}
-
 
 SDL_Rect calculate_viewport( int x, int y, int w, int h ) {
     SDL_Rect r;
@@ -171,6 +178,7 @@ void load_map() {
 
 }
 
+
 int tile_is_solid( const Tmx::Tile *tile ) {
     return ( tile->GetProperties().GetLiteralProperty( "solid" ) == "1" );
 }
@@ -198,181 +206,6 @@ int map_is_solid_here( int col, int row ) {
         }
     }
     return 0;
-}
-
-//
-// return d_ti time to impact
-float intersect_with_vertical(
-    float x0, float y0, float dx, float dy, float dt,
-    float a0, float b0, float a1, float b1
-) {
-    if( a1 != a0 ) {
-        printf_debug( "woops line is not vertical\n");
-        exit(1);
-    }
-    if( x0 <= a0 && a0 < x0 + dx*dt ) {
-        float j = y0 + ( dy / dx * (a0 - x0) );
-        if( b0 < j && j < b1 ) {
-            return (a0 - x0) / dx;
-        }
-    }
-    // no intersection
-    return -1.0f;
-}
-
-float intersect_with_horizontal(
-    float x0, float y0, float dx, float dy, float dt,
-    float a0, float b0, float a1, float b1
-) {
-    if( b1 != b0 ) {
-        printf_debug( "woops line is not vertical\n");
-        exit(1);
-    }
-    if( y0 <= b0 && b0 < y0 + dy*dt ) {
-        float j = x0 + ( dx / dy * (b0 - y0) );
-        if( a0 < j && j < a1 ) {
-            return (b0 - y0) / dy;
-        }
-    }
-    // no intersection
-    return -1.0f;
-}
-
-// iterate blocks in quadrants
-// if dx and dy both > 0, analyse top right quadrant
-// use of sgn(0) == 0 means special case dx or dy == 0 results in horizontal line
-struct contact find_intersection_with_solid(
-    float x, float y,
-    float dx, float dy,
-    float dt
-) {
-    int col = x / map->GetTileWidth();
-    int row = y / map->GetTileWidth();
-    printf_debug( "corner col: %i, %i\n", col, row );
-    int colinc = std::copysign( 1, dx );
-    int rowinc = std::copysign( 1, dy );
-    for(
-        int blockdist = 1;
-        //blockdist <= std::max( 1, (int)(2 * dt * (abs(dx) + abs(dy)) / map->GetTileWidth()) );
-        blockdist <= 3;
-        blockdist++
-    ) {
-        //printf_debug( "blockdist: %i\n", blockdist );
-        int rc = row;
-        for(
-            int cc = col + (colinc * blockdist);
-            cc + colinc != col;
-            cc -= colinc
-        ) {
-            printf_debug( "  cc: %i\n", cc );
-            /*for(
-                int rc = row;
-                rc != row + (rowinc * blockdist);
-                rc += rowinc
-            )*/ {
-                printf_debug( "  rc: %i\n", rc );
-                float intersect = -1.0;
-                if( cc >= map->GetWidth() || cc < 0 || rc >= map->GetHeight() || rc < 0 ) {
-                    continue;
-                }
-                if( map_is_solid_here( cc, rc ) ) {
-                    if( dx > 0 ) {
-                        // left edge
-                        intersect = intersect_with_vertical(
-                            x, y, dx, dy, dt,
-                            cc * map->GetTileWidth(),
-                            rc * map->GetTileHeight(),
-                            cc * map->GetTileWidth(),
-                            (rc + 1) * map->GetTileHeight()
-                        );
-                        if( intersect >= 0.0 ) {
-                            return { intersect, -1.0, 0.0 };
-                        }
-                    }
-                    if( dx < 0 ) {
-                        // right edge
-                        intersect = intersect_with_vertical(
-                            x, y, dx, dy, dt,
-                            (cc + 1) * map->GetTileWidth(),
-                            rc * map->GetTileHeight(),
-                            (cc + 1) * map->GetTileWidth(),
-                            (rc + 1) * map->GetTileHeight()
-                        );
-                        if( intersect >= 0.0 ) {
-                            return { intersect, 1.0, 0.0 };
-                        }
-                    }
-                    if( dy > 0 ) {
-                        // top edge
-                        intersect = intersect_with_horizontal(
-                            x, y + 1, dx, dy, dt,
-                            cc * map->GetTileWidth(),
-                            rc * map->GetTileHeight(),
-                            (cc + 1) * map->GetTileWidth(),
-                            rc * map->GetTileHeight()
-                        );
-                        printf_debug( "%f, %f - %i, %i : %f\n", x/map->GetTileWidth(), y/map->GetTileWidth(), cc, rc, intersect );
-                        if( intersect >= 0.0 ) {
-                            printf_debug( "boom \n" );
-                            return { intersect, 0.0, -1.0 };
-                        }
-                    }
-                    if( dy < 0 ) {
-                        // bottom edge
-                        intersect = intersect_with_horizontal(
-                            x, y, dx, dy, dt,
-                            cc * map->GetTileWidth(),
-                            (rc + 1) * map->GetTileHeight(),
-                            (cc + 1) * map->GetTileWidth(),
-                            (rc + 1) * map->GetTileHeight()
-                        );
-                        if( intersect >= 0.0 ) {
-                            return { intersect, 0.0, 1.0 };
-                        }
-                    }
-                }
-            }
-            rc += rowinc;
-        }
-    }
-    //return -1.0;
-    return { -1.0, 0.0, 0.0 };
-}
-
-// returns the next solid block below
-int find_surface_down( int x, int y ) {
-    int col = x / map->GetTileWidth();
-    for( int level = y / map->GetTileHeight(); level < map->GetHeight(); level ++ ) {
-        for (int i = map->GetNumLayers() - 1; i >= 0; i--) {
-            const Tmx::Layer *layer = map->GetLayer(i);
-            if( col < 0 || col >= layer->GetWidth() || level < 0 || level > layer->GetHeight() ) {
-                continue;
-            }
-            if( level_is_solid_here( layer, col, level ) ) {
-                return level * map->GetTileHeight();
-            }
-        }
-    }
-    // bottom of map
-    return map->GetHeight() * map->GetTileHeight();
-}
-
-// returns the next solid block below
-int find_surface_up( int x, int y ) {
-    int col = x / map->GetTileWidth();
-    for( int level = y / map->GetTileHeight(); level >= 0; level -- ) {
-        for (int i = map->GetNumLayers() - 1; i >= 0; i--) {
-            const Tmx::Layer *layer = map->GetLayer(i);
-            if( col < 0 || col >= layer->GetWidth() || level < 0 || level > layer->GetHeight() ) {
-                continue;
-            }
-            if( level_is_solid_here( layer, col, level ) ) {
-                return level * map->GetTileHeight();
-            }
-        }
-    }
-    // bottom of map
-    return map->GetHeight() * map->GetTileHeight();
 }
 
 const Tmx::Tile *get_tile_by_coords( int x, int y ) {
@@ -452,6 +285,83 @@ int render_map( int v_x, int v_y, SDL_Surface *destination ) {
     return 1;
 }
 
+std::vector<b2Body*> solids;
+int build_map() {
+    for (int y = 0; y < map->GetHeight(); ++y) {
+        for (int x = 0; x < map->GetWidth(); ++x) {
+            // iterate in reverse so we get top layer first
+            for (int i = map->GetNumLayers() - 1; i >= 0; i--) {
+                const Tmx::Layer *layer = map->GetLayer(i);
+                int tile_id = layer->GetTileId(x, y);
+                if( tile_id ) {
+                    const Tmx::Tileset *tileset = map->FindTileset(tile_id);
+                    const Tmx::Tile *tile = tileset->GetTile(tile_id);
+                    if( tile ) {
+                        // not sure why a tileid wouldn't resolve to a tile...
+                        if( tile_is_solid( tile ) ) {
+                            b2BodyDef groundBodyDef;
+                            groundBodyDef.position.Set(
+                                ((float)x + 0.5) * tileset->GetTileWidth() / SCALE,
+                                ((float)y + 0.5) * tileset->GetTileHeight() / SCALE
+                            );
+                            groundBodyDef.userData = (void*)tile;
+                            b2Body* groundBody = world->CreateBody(&groundBodyDef);
+                            b2PolygonShape groundBox;
+                            groundBox.SetAsBox(
+                                (float)(tileset->GetTileWidth()) / SCALE / 2,
+                                (float)(tileset->GetTileHeight()) / SCALE / 2
+                            );
+
+                            groundBody->CreateFixture(&groundBox, 0.0f);
+                            solids.push_back( groundBody );
+                            
+
+                        } else {
+                            // TODO
+                        }
+                    } else {
+                        // we have to construct a tile ourselves!
+                        // TODO
+                    }
+                    break;
+                } else {
+                    //Nuffin 'ere at all
+                }
+            }
+        }
+	}
+    for (int i = 0; i < map->GetNumObjectGroups(); i ++) {
+        const Tmx::ObjectGroup *group = map->GetObjectGroup(i);
+        for (int j = 0; j < group->GetNumObjects(); j ++) {
+            const Tmx::Object *ob = group->GetObject(j);
+            if( ob->GetType().compare("polyline") == 0 ) {
+                const Tmx::Polyline *pl = ob->GetPolyline();
+                int x = ob->GetX();
+                int y = ob->GetY();
+                b2Vec2 * vertices;
+                printf_debug( "polyline %i\n", ob->GetPolyline()->GetNumPoints() );
+                vertices = new b2Vec2 [ob->GetPolyline()->GetNumPoints()];
+                for( int k = 0; k < ob->GetPolyline()->GetNumPoints(); k ++ ) {
+                    Tmx::Point p = ob->GetPolyline()->GetPoint( k );
+                    vertices[ k ].Set( (float)(p.x)/SCALE, (float)(p.y)/SCALE );
+                    printf_debug( "node %f %f\b", (float)(p.x), (float)(p.y) );
+                }
+                b2ChainShape chain;// = new b2ChainShape();
+                chain.CreateChain( vertices, ob->GetPolyline()->GetNumPoints() );
+                            b2BodyDef groundBodyDef;
+                            groundBodyDef.position.Set( (float)x/SCALE, (float)y/SCALE );
+                            b2Body* groundBody = world->CreateBody(&groundBodyDef);
+                            groundBody->CreateFixture(&chain, 10.0f);
+                            solids.push_back( groundBody );
+            }
+
+        }
+
+    }
+
+    return 1;
+}
+
 // ************* Sprite classes ******************8
 
 class Sprite {
@@ -485,8 +395,8 @@ class NinjaPlayer: public Sprite {
         float last_frame_timer;
         float frame_timer;
 
-        float dx;
-        float dy;
+        //float dx;
+        //float dy;
         float jump_dy; // -900.0// initial jump velocity
         float run_ddx; //3000.0; // p/s^2
 
@@ -506,14 +416,14 @@ class NinjaPlayer: public Sprite {
         void walk();
         void run();
         void jump( int time, int floor_left, int floor_right );
-        void jump( int time, struct contact touching );
+        //void jump( int time, struct contact touching );
         void left( float tdelta );
         void right( float tdelta );
+        void halt( float tdelta );
 
         void updateKinematics( float tdelta );
         SDL_Rect getCurrentFrame();
         // find if we're overlapping a tile while travelling
-        void collision();
 
         int xleft() { return (int)x; }
         int xright() { return (int)x+fr_w; }
@@ -524,17 +434,26 @@ class NinjaPlayer: public Sprite {
         int set_ytop( int ny ) { y = (float)ny; }
         int set_ybottom( int ny ) { y = (float)( ny - fr_h ); }
 
-        struct contact map_collisions( float dt );
-
         short fr_w;
         short fr_h;
 
+        b2Body* body;
+        void setPosition( float x, float y );
+        int getScreenX();
+        int getScreenY();
+
+        float dx();
+        float dy();
+
 };
 
-void NinjaPlayer::collision() {
-    if( dx > 0 ) {
-    }
+int NinjaPlayer::getScreenX() {
+    return (int)( body->GetPosition().x * SCALE ) - (fr_w/2);
 }
+int NinjaPlayer::getScreenY() {
+    return (int)( body->GetPosition().y * SCALE ) - (fr_h/2);
+}
+
 
 NinjaPlayer::NinjaPlayer() {
     frame_count = 0;
@@ -544,13 +463,13 @@ NinjaPlayer::NinjaPlayer() {
     fr_w = 42;
     fr_h = 50;
 
-    dx = 0.0;
-    dy = 0.0;
+    //dx = 0.0;
+    //dy = 0.0;
     jump_dy = -500.0; // -900.0// initial jump velocity
     run_ddx = 4000.0; //3000.0; // p/s^2
 
-    walkspeed = 400.0; // p/s^2
-    runspeed = 600.0; // p/s^2
+    walkspeed = 100.0; // p/s^2
+    runspeed = 200.0; // p/s^2
 
     jump_powering = false;
     jump_start = 0;
@@ -583,6 +502,28 @@ NinjaPlayer::NinjaPlayer() {
     }
     current_animation = RUN_LEFT;
     top_speed = runspeed;
+
+    //
+    b2BodyDef bodyDef;
+    bodyDef.type = b2_dynamicBody;
+    bodyDef.position.Set(10.0f, 10.0f);
+    bodyDef.fixedRotation = true;
+    //bodyDef.linearDamping = 0.9f;
+    body = world->CreateBody(&bodyDef);
+
+    b2PolygonShape dynamicBox;
+    dynamicBox.SetAsBox((float)fr_w/SCALE/2.0f, (float)fr_h/SCALE/2.0f);
+
+    b2FixtureDef fixtureDef;
+    fixtureDef.shape = &dynamicBox;
+    fixtureDef.density = 100.0f; //300kg/m3
+    fixtureDef.friction = 0.5f;
+    fixtureDef.restitution = 0.05f;
+
+    body->CreateFixture(&fixtureDef);
+}
+void NinjaPlayer::setPosition( float x, float y ) {
+    body->SetTransform(b2Vec2(x/SCALE, y/SCALE),0.0);
 }
 
 NinjaPlayer::~NinjaPlayer() {
@@ -591,10 +532,18 @@ NinjaPlayer::~NinjaPlayer() {
     delete animations;
 	SDL_FreeSurface( sprite_sheet );
 }
+// get pixel vel updown
+float NinjaPlayer::dy() {
+    return body->GetLinearVelocity().y * SCALE;
+}
+// get pixel vel sideways
+float NinjaPlayer::dx() {
+    return body->GetLinearVelocity().x * SCALE;
+}
 void NinjaPlayer::animate( float tdelta ) {
-    if( dx > 0.1 ) {
+    if( dx() > 0.1 ) {
         current_animation = RUN_RIGHT;
-    } else if( dx < -0.1 ) {
+    } else if( dx() < -0.1 ) {
         current_animation = RUN_LEFT;
     } else {
         if( current_animation == RUN_LEFT ) {
@@ -604,7 +553,7 @@ void NinjaPlayer::animate( float tdelta ) {
         }
         // else don't change it
     }
-    frame_timer += ( ( pow( abs(dx) / runspeed, 0.5 ) ) * tdelta );
+    frame_timer += ( ( pow( abs(dx()) / runspeed / 2, 0.9 ) ) * tdelta );
     if( frame_timer >= last_frame_timer + animations[ current_animation ].frames[ frame_count ].duration ) {
         frame_timer = 0.0;
         last_frame_timer = 0.0;
@@ -615,14 +564,14 @@ void NinjaPlayer::animate( float tdelta ) {
     }
 }
 void NinjaPlayer::updateKinematics( float tdelta ) {
-    if( dx < -1.0 * top_speed ) {
-        dx = -1.0 * top_speed;
+    if( dx() < -1.0 * top_speed ) {
+        //dx() = -1.0 * top_speed;
     }
-    if( dx > top_speed ) {
-        dx = top_speed;
+    if( dx() > top_speed ) {
+        //dx() = top_speed;
     }
-    x = x + tdelta * dx;
-    y = y + tdelta * dy;
+    x = x + tdelta * dx();
+    y = y + tdelta * dy();
 }
 void NinjaPlayer::run() {
     top_speed = runspeed;
@@ -635,7 +584,7 @@ SDL_Rect NinjaPlayer::getCurrentFrame() {
 }
 // floor = last place you were standing
 //void NinjaPlayer::jump( int time, int floor_left, int floor_right ) {
-void NinjaPlayer::jump( int time, struct contact touching ) {
+/*void NinjaPlayer::jump( int time, struct contact touching ) {
     if( jump_powering == true ) {
         if( time >= jump_start + jump_power_time ) {
             // finish jump power phase
@@ -652,101 +601,35 @@ void NinjaPlayer::jump( int time, struct contact touching ) {
         jump_powering = true;
         jump_start = time;
     }
-}
+}*/
 void NinjaPlayer::left( float tdelta ) {
-    dx -= tdelta * run_ddx;
+    b2Vec2 vel = body->GetLinearVelocity();
+    float vel_change = -1.0f * top_speed/SCALE - vel.x;
+    float impulse = body->GetMass() * vel_change / 10;
+    body->ApplyLinearImpulse( b2Vec2( impulse, 0), body->GetWorldCenter() );
 }
 void NinjaPlayer::right( float tdelta ) {
-    dx += tdelta * run_ddx;
+    b2Vec2 vel = body->GetLinearVelocity();
+    float vel_change = top_speed/SCALE - vel.x;
+    float impulse = body->GetMass() * vel_change / 10;
+    body->ApplyLinearImpulse( b2Vec2( impulse, 0), body->GetWorldCenter() );
 }
-
-// return 1 if this sprite impacts a solid map block
-// on current trajectory and updates internal dx,dy to truncate
-// trajectory so it rests against block next frame
-struct contact NinjaPlayer::map_collisions( float dt ) {
-    // time to impact
-    // -1.0 special no-impact value
-    float t2i = -1.0;
-    struct contact impact = { -1.0, 0.0, 0.0 };
-    float rx = 0.0;
-    float ry = 0.0;
-
-    printf_debug( "--\n\n" );
-
-    // top left corner
-    if( dy < 0 || dx < 0 ) {
-        printf_debug( "top left\n" );
-        struct contact new_impact = find_intersection_with_solid(
-            xleft(), ytop(), dx, dy, dt
-        );
-        // will we impact something sooner on this corner?
-        //if( new_t2i >= 0.0 && new_t2i < t2i ) {
-            // optimised ;-)
-            impact = new_impact;
-        //}
-    }
-    // top right corner
-    if( dy < 0 || dx > 0 ) {
-        printf_debug( "top right\n" );
-        struct contact new_impact = find_intersection_with_solid(
-            xright(), ytop(), dx, dy, dt
-        );
-        // will we impact something sooner on this corner?
-        if( new_impact.t2i >= 0.0 && ( new_impact.t2i < impact.t2i || impact.t2i < 0.0 ) ) {
-            impact = new_impact;
-        }
-    }
-    // bottom right corner
-    if( dy > 0 || dx > 0 ) {
-        printf_debug( "bottom right\n" );
-        struct contact new_impact = find_intersection_with_solid(
-            xright(), ybottom(), dx, dy, dt
-        );
-        // will we impact something sooner on this corner?
-        if( new_impact.t2i >= 0.0 && ( new_impact.t2i < impact.t2i || impact.t2i < 0.0 ) ) {
-            printf_debug( "br x\n" );
-            impact = new_impact;
-        }
-    }
-    // bottom left corner
-    if( dy > 0.0 || dx < 0.0 ) {
-        printf_debug( "bottom left\n" );
-        struct contact new_impact = find_intersection_with_solid(
-            xleft(), ybottom(), dx, dy, dt
-        );
-        // will we impact something sooner on this corner?
-        if( new_impact.t2i >= 0.0 && ( new_impact.t2i < impact.t2i || impact.t2i < 0.0 ) ) {
-            printf_debug( "bl x\n" );
-            impact = new_impact;
-        }
-    }
-    // if there's an impact, truncate our trajectory
-    if( impact.t2i >= 0.0 ) {
-        // TODO support diagonals
-        
-        // is the resistance from surface opposing our current velocity?
-        if( impact.rx != 0.0 && std::copysign( 1, impact.rx ) != std::copysign( 1, dx ) ) {
-            printf_debug( "slow x\n" );
-            // scale our velocity so we finish frame at surface
-            dx = floor( dx * impact.t2i / dt );
-        } else if( impact.ry != 0.0 && std::copysign( 1, impact.ry ) != std::copysign( 1, dy ) ) {
-            printf_debug( "slow y\n" );
-            dy = floor( dy * impact.t2i / dt );
-        }
-        // collision flag
-        printf_debug( "bang\n" );
-    }
-    return impact;
+void NinjaPlayer::halt( float tdelta ) {
+    b2Vec2 vel = body->GetLinearVelocity();
+    float vel_change = 0.0f - vel.x;
+    float impulse = body->GetMass() * vel_change / 10;
+    body->ApplyLinearImpulse( b2Vec2( impulse, 0), body->GetWorldCenter() );
 }
-
-
 
 
 // ***************** entry point *******************
 
 int main( int argc, char **argv ) {
 
-	SDL_Surface *screen = NULL;
+    b2Vec2 gravity(0.0f, 9.81f);
+    bool doSleep = true;
+    world = new b2World(gravity, doSleep);
+
 	//The layers
 	SDL_Surface *message = NULL;
 	SDL_Surface *background = NULL;
@@ -785,6 +668,7 @@ int main( int argc, char **argv ) {
 
     background = init_background();
     render_map( 0, 0, background );
+    build_map();
 
 	float dynamic_friction = 12.00; // 1/s
 	float static_friction = 12.0; // p/s^2
@@ -794,17 +678,27 @@ int main( int argc, char **argv ) {
 	float tdelta = 0;
 
     NinjaPlayer player = NinjaPlayer();
-    player.x = 300.0;
-    player.y = 200.0;
+    player.setPosition( 300.0, 200.0 );
 
     // init last_time or it goes mental
     last_time = SDL_GetTicks();
 
+    int32 velocityIterations = 6;
+    int32 positionIterations = 2;
+
 	while( !quit ) {
+
 
 		time = SDL_GetTicks();
 		tdelta = (float)((time - last_time)/1000.0) / SLOW_DOWN;
 		last_time = time;
+
+        world->Step(tdelta, velocityIterations, positionIterations);
+        printf_debug( "step" );
+        b2Vec2 position = player.body->GetPosition();
+        float32 angle = player.body->GetAngle();
+        printf_debug("%4.2f %4.2f %4.2f\n", position.x, position.y, angle);
+        printf_debug("%i %i\n", to_screen(position.x), to_screen(position.y));
 		
 		if( SDL_PollEvent( &event ) ) {
 			if( event.type == SDL_KEYDOWN ) {
@@ -820,122 +714,45 @@ int main( int argc, char **argv ) {
 			}
 		}
 		Uint8 *keystates = SDL_GetKeyState( NULL );
-		if( keystates[ SDLK_LCTRL ] ) {
-			player.run();
-		} else {
-			player.walk();
-		}
-
-        //int floor = find_surface_down( (int)player.x, (int)player.y );
-
-        // calculate the floor(s) beneath me
-        int floorl = find_surface_down( player.xleft(), player.ybottom() );
-        int floorr = find_surface_down( player.xright(), player.ybottom() );
-
-        // calculate blocks I will collide with on current path
-
-        // calculate is any of 4 lines from tl -> br will intersect a box
-        //
-        // for each corner
-        //   line is x0,y0 -> x+dx.t,y+dy.t = x1,x1
-        //
-        //   for each block
-        //     for each side t,r,b,l
-        //       if x0 >= x1 and x0 < x+dx.t
-        //         and by
-        //float ttt = 0.0;
-        //ttt = intersect_with_vertical( 1.0, 1.0, 0.3, 0.3, 10, 2.0, 1.0, 2.0, 4.0 );
-        //ttt = intersect_with_horizontal( 1.0, 1.0, 0.3, 0.3, 10, 1.0, 2.0, 5.0, 2.0 );
-        //
-        //
-
-        struct contact touching = player.map_collisions( tdelta );
-        player.updateKinematics( tdelta );
-
-        //if( keystates[ SDLK_DOWN ] && player.dy == 0.0 ) {
-		//	player.y += 1.0;
+		//if( keystates[ SDLK_LCTRL ] ) {
+		//	player.run();
+		//} else {
+		//	player.walk();
 		//}
 
-		/*if( keystates[ SDLK_UP ] ) {
-			//y -= 1;
-		}
-		*/
-
-        //const Tmx::Tile *tilel = get_tile_by_coords( player.xleft(), player.ybottom() );
-        //const Tmx::Tile *tiler = get_tile_by_coords( player.xright(), player.ybottom() );
-
-        // correct for collisions
-
-        /*if( tilel && player.dy > 0 ) {
-            if( tile_is_solid( tilel ) ) {
-                // move to top of tile
-                player.y = ( player.y / map->GetTileHeight() ) * map->GetTileHeight();
-                //player.y = floorl;
-                player.dy = 0;
-            }
-        } else if( tiler && player.dy > 0 ) {
-            if( tile_is_solid( tiler ) ) {
-                // move to top of tile
-                player.y = ( player.y / map->GetTileHeight() ) * map->GetTileHeight();
-                //player.y = floorr;
-                player.dy = 0;
-            }
-        } else {
-            if( player.ybottom() <= floorl && player.ybottom() <= floorr ) {
-                printf_debug( "creep\n" );
-            }
-        }*/
+        //player.updateKinematics( tdelta );
 
 		if( keystates[ SDLK_UP ] ) {
-			player.jump( time, touching );
+			//player.jump( time, touching );
 		}
 
-        //printf_debug( "Player: %i, Floorl: %i, Floorr: %i\n", (int)player.ybottom(), floorl, floorr );
-        // have I fallen through the surface of a solid tile?
+        //player.dy += tdelta * GRAVITY;
 
-        /*if( player.ybottom() >= floorl && player.dy > 0.0 ) {
-            player.set_ybottom( floorl );
-            player.dy = 0;
-        } else if ( player.ybottom() >= floorr && player.dy > 0.0 ) {
-            player.set_ybottom( floorr );
-            player.dy = 0;
-        } else {
-            player.dy += tdelta * GRAVITY;
-        }*/
         
-        player.dy += tdelta * GRAVITY;
-
 		if( keystates[ SDLK_LEFT ] ) {
             player.left( tdelta );
 		} else if( keystates[ SDLK_RIGHT ] ) {
             player.right( tdelta );
 		} else {
-			// friction
-			if( player.dx < 0.0 || player.dx > 0.0 ) {
-				float friction_dir = ( player.dx > 0.0 ? -1.0 : 1.0 );
-				int newdx = player.dx + friction_dir * tdelta * ( static_friction + abs(player.dx) * dynamic_friction );
-				if( newdx * player.dx < 0.0 ) {
-					// sign change - we've gone through 0
-					newdx = 0.0;
-				}
-				player.dx = newdx;
-			}
+            // supply a halting impule
+            player.halt( tdelta );
+        }
+        if( keystates[ SDLK_UP ] ) {
+            //player.right( tdelta );
+            b2Vec2 push( 0.0f, -10000.0f );
+            player.body->ApplyForce( push, position );
 		}
 
         player.animate( tdelta );
 
-        SDL_Rect vp = calculate_viewport( (int)player.x, (int)player.y, map->GetWidth() * map->GetTileWidth(), map->GetHeight() * map->GetTileHeight() );
-        //printf_debug( "%i, %i, %i, %i\n", vp.x, vp.y, map->GetWidth(), map->GetHeight() );
+        SDL_Rect vp = calculate_viewport( player.getScreenX(), player.getScreenY(), map->GetWidth() * map->GetTileWidth(), map->GetHeight() * map->GetTileHeight() );
 
-		//int bg_offset = (int)player.x % background->w;
 		clear_surface( screen, 0xffffffff );
-		//apply_tiling_surface( 0, (int)floor, screen->w, 0/*bg_offset*/, background, screen );
 		apply_surface( 0-vp.x, 0-vp.y, background, screen );
 
-        //SDL_Rect player_rect = player.frames[ player.current_animation[ player.frame_count ] ].rect;
-        SDL_Rect player_rect = player.getCurrentFrame();;
+        SDL_Rect player_rect = player.getCurrentFrame();
 
-		apply_sprite( (int)player.x - vp.x, (int)(player.y) - vp.y, player.sprite_sheet, &player_rect, screen );
+		apply_sprite( player.getScreenX() - vp.x, player.getScreenY() -  vp.y, player.sprite_sheet, &player_rect, screen );
 
         // use up remaining ticks before frame is done
         //if( tdelta < (1.0/(float)FPS_CAP) ) {
@@ -953,7 +770,6 @@ int main( int argc, char **argv ) {
 			formatter << fps;
 		}
 	}
-	//SDL_Delay( 500 );
 	SDL_Quit();
 	delete map;
 	return 0;
