@@ -33,10 +33,10 @@ const int TH = 32;
 const int SCREEN_FLAGS = SDL_HWSURFACE | SDL_DOUBLEBUF | SDL_ASYNCBLIT;// | SDL_FULLSCREEN;
 const int FPSFPS = 10; // rate at which FPS display is updated
 const float GRAVITY = 3000.0; //pixels per second per second
-const int FPS_CAP = 5; // if FLIP isn't vsynced, limit to this so we don't waste cycles
+const int FPS_CAP = 60; // if FLIP isn't vsynced, limit to this so we don't waste cycles
 const float SLOW_DOWN = 1.0;
 // pixels per metre
-const float SCALE = 25; // pixels per metre
+const float SCALE = 100; // pixels per metre
 
 Tmx::Map *map;
 std::map<std::string, SDL_Surface*> tilesets;
@@ -234,6 +234,29 @@ SDL_Surface *init_background() {
     return SDL_CreateRGBSurface( SDL_HWSURFACE, map->GetWidth() * TW, map->GetHeight() * TH, 32, 0, 0, 0, 0 );
 }
 
+int debug_render_map( int v_x, int v_y, SDL_Surface *destination ) {
+    for (int i = 0; i < map->GetNumObjectGroups(); i ++) {
+        const Tmx::ObjectGroup *group = map->GetObjectGroup(i);
+        for (int j = 0; j < group->GetNumObjects(); j ++) {
+            const Tmx::Object *ob = group->GetObject(j);
+            if( ob->GetType().compare("polyline") == 0 ) {
+                const Tmx::Polyline *pl = ob->GetPolyline();
+                int x = ob->GetX();
+                int y = ob->GetY();
+                b2Vec2 * vertices;
+                //printf_debug( "polyline %i\n", ob->GetPolyline()->GetNumPoints() );
+                for( int k = 0; k < ob->GetPolyline()->GetNumPoints(); k ++ ) {
+                    Tmx::Point p = ob->GetPolyline()->GetPoint( k );
+                    //vertices[ k ].Set( (float)(p.x)/SCALE, (float)(p.y)/SCALE );
+                    //printf_debug( "node %f %f\b", (float)(p.x), (float)(p.y) );
+                }
+            }
+
+        }
+
+    }
+    return 1;
+}
 int render_map( int v_x, int v_y, SDL_Surface *destination ) {
                 //Tmx::Tile *tile = *(tileset->GetTiles().begin());
                 //tile_is_solid( tile )
@@ -415,8 +438,8 @@ class NinjaPlayer: public Sprite {
 
         void walk();
         void run();
-        void jump( int time, int floor_left, int floor_right );
-        //void jump( int time, struct contact touching );
+        //void jump( int time, int floor_left, int floor_right );
+        void jump( int time, float dt );
         void left( float tdelta );
         void right( float tdelta );
         void halt( float tdelta );
@@ -437,13 +460,20 @@ class NinjaPlayer: public Sprite {
         short fr_w;
         short fr_h;
 
-        b2Body* body;
+        b2Body *body;
+        //b2PolygonShape *floorSensor;
+        //b2FixtureDef *floorSensorDef;
+        b2Fixture *floorSensor;
+
         void setPosition( float x, float y );
         int getScreenX();
         int getScreenY();
 
         float dx();
         float dy();
+
+        bool onFloor;
+        float last_jump_impulse;
 
 };
 
@@ -459,13 +489,16 @@ NinjaPlayer::NinjaPlayer() {
     frame_count = 0;
     last_frame_timer = 0.0;
     frame_timer = 0.0;
+    last_jump_impulse = 0.0;
+
+    onFloor = false;
 
     fr_w = 42;
     fr_h = 50;
 
     //dx = 0.0;
     //dy = 0.0;
-    jump_dy = -500.0; // -900.0// initial jump velocity
+    jump_dy = -300.0; // -900.0// initial jump velocity
     run_ddx = 4000.0; //3000.0; // p/s^2
 
     walkspeed = 100.0; // p/s^2
@@ -518,8 +551,17 @@ NinjaPlayer::NinjaPlayer() {
     fixtureDef.shape = &dynamicBox;
     fixtureDef.density = 100.0f; //300kg/m3
     fixtureDef.friction = 0.5f;
-    fixtureDef.restitution = 0.05f;
+    fixtureDef.restitution = 0.00f;
 
+    b2PolygonShape floorSensorShape;
+    floorSensorShape.SetAsBox(2.0f/SCALE, 2.0f/SCALE, b2Vec2(0.0f, (float)fr_h/SCALE/2.0f), 0.0f );
+
+    b2FixtureDef floorSensorDef;
+    floorSensorDef.isSensor = true;
+    floorSensorDef.userData = (void*)this;
+    floorSensorDef.shape = &floorSensorShape;
+
+    floorSensor = body->CreateFixture(&floorSensorDef);
     body->CreateFixture(&fixtureDef);
 }
 void NinjaPlayer::setPosition( float x, float y ) {
@@ -584,24 +626,33 @@ SDL_Rect NinjaPlayer::getCurrentFrame() {
 }
 // floor = last place you were standing
 //void NinjaPlayer::jump( int time, int floor_left, int floor_right ) {
-/*void NinjaPlayer::jump( int time, struct contact touching ) {
+void NinjaPlayer::jump( int time, float dt ) {
     if( jump_powering == true ) {
         if( time >= jump_start + jump_power_time ) {
             // finish jump power phase
+            printf_debug( "jump done\n" );
             jump_powering = false;
         } else {
             // keep powering
-            dy = jump_dy * ( 1.0 - (time - jump_start ) / jump_power_time );
+            //dy = jump_dy * ( 1.0 - (time - jump_start ) / jump_power_time );
+            printf_debug( "jump float\n" );
+            // applying impulses allows for a 'constant energy' appoach
+            // sum of dt's should be <= jump_power_time
+            body->ApplyLinearImpulse( b2Vec2( 0, last_jump_impulse * dt * 10), body->GetWorldCenter() );
         }
     //} else if( ybottom() == floor_left || ybottom() == floor_right ) {
-    } else if( touching.t2i < 0.1 && touching.t2i > -0.1 && touching.ry == -1.0 ) {
+    } else if( onFloor ) {
         printf_debug( "jump\n" );
         // start jump power phase
-        dy = jump_dy;
+        //dy = jump_dy;
+        //b2Vec2 vel = body->GetLinearVelocity();
+        float vel_change = jump_dy/SCALE;// - vel.y;
+        last_jump_impulse = body->GetMass() * vel_change;
+        body->ApplyLinearImpulse( b2Vec2( 0, last_jump_impulse), body->GetWorldCenter() );
         jump_powering = true;
         jump_start = time;
     }
-}*/
+}
 void NinjaPlayer::left( float tdelta ) {
     b2Vec2 vel = body->GetLinearVelocity();
     float vel_change = -1.0f * top_speed/SCALE - vel.x;
@@ -621,6 +672,51 @@ void NinjaPlayer::halt( float tdelta ) {
     body->ApplyLinearImpulse( b2Vec2( impulse, 0), body->GetWorldCenter() );
 }
 
+class PlayerContactListener : public b2ContactListener {
+public:
+    NinjaPlayer *player;
+    int numFootContacts;
+    PlayerContactListener( NinjaPlayer *_player ) {
+        numFootContacts = 0;
+        player = _player;
+    }
+    void BeginContact(b2Contact* contact) {
+        //check if fixture A was the foot sensor
+        void* fixtureUserData = contact->GetFixtureA()->GetUserData();
+        if ( (NinjaPlayer *)fixtureUserData == player ) {
+            numFootContacts++;
+        }
+        //check if fixture B was the foot sensor
+        fixtureUserData = contact->GetFixtureB()->GetUserData();
+        if ( (NinjaPlayer *)fixtureUserData == player ) {
+            numFootContacts++;
+        }
+        if ( numFootContacts > 0 ) {
+            player->onFloor = true;
+        } else {
+            player->onFloor = false;
+        }
+
+    }
+
+    void EndContact(b2Contact* contact) {
+        //check if fixture A was the foot sensor
+        void* fixtureUserData = contact->GetFixtureA()->GetUserData();
+        if ( (NinjaPlayer *)fixtureUserData == player ) {
+            numFootContacts--;
+        }
+        //check if fixture B was the foot sensor
+        fixtureUserData = contact->GetFixtureB()->GetUserData();
+        if ( (NinjaPlayer *)fixtureUserData == player ) {
+            numFootContacts--;
+        }
+        if ( numFootContacts > 0 ) {
+            player->onFloor = true;
+        } else {
+            player->onFloor = false;
+        }
+    }
+};
 
 // ***************** entry point *******************
 
@@ -645,7 +741,7 @@ int main( int argc, char **argv ) {
     load_map();
 
 	// for FPS
-	formatter.precision( 4 );
+	formatter.precision( 5 );
 
 	TTF_Font *font = NULL;
 	SDL_Color textColor = { 255, 255, 255 };
@@ -668,6 +764,7 @@ int main( int argc, char **argv ) {
 
     background = init_background();
     render_map( 0, 0, background );
+    debug_render_map( 0, 0, background );
     build_map();
 
 	float dynamic_friction = 12.00; // 1/s
@@ -679,6 +776,9 @@ int main( int argc, char **argv ) {
 
     NinjaPlayer player = NinjaPlayer();
     player.setPosition( 300.0, 200.0 );
+
+    PlayerContactListener *clistener = new PlayerContactListener( &player );
+    world->SetContactListener( clistener );
 
     // init last_time or it goes mental
     last_time = SDL_GetTicks();
@@ -723,8 +823,10 @@ int main( int argc, char **argv ) {
         //player.updateKinematics( tdelta );
 
 		if( keystates[ SDLK_UP ] ) {
-			//player.jump( time, touching );
+		    player.jump( time, tdelta );
 		}
+        //if( player.onFloor ) {
+        //}
 
         //player.dy += tdelta * GRAVITY;
 
@@ -737,11 +839,11 @@ int main( int argc, char **argv ) {
             // supply a halting impule
             player.halt( tdelta );
         }
-        if( keystates[ SDLK_UP ] ) {
-            //player.right( tdelta );
-            b2Vec2 push( 0.0f, -10000.0f );
-            player.body->ApplyForce( push, position );
-		}
+        //if( keystates[ SDLK_UP ] ) {
+        //    //player.right( tdelta );
+        //    b2Vec2 push( 0.0f, -1000.0f );
+        //    player.body->ApplyForce( push, position );
+		//}
 
         player.animate( tdelta );
 
@@ -755,19 +857,19 @@ int main( int argc, char **argv ) {
 		apply_sprite( player.getScreenX() - vp.x, player.getScreenY() -  vp.y, player.sprite_sheet, &player_rect, screen );
 
         // use up remaining ticks before frame is done
-        //if( tdelta < (1.0/(float)FPS_CAP) ) {
-		//    SDL_Delay( (int)( ( 1/(float)FPS_CAP - tdelta ) * 1000 ) );
-        //}
-        SDL_Delay( (int) ( 3 * pow( SLOW_DOWN, 2 ) ) ); // recommend to smooth things out
+        if( tdelta < (1.0/(float)FPS_CAP) ) {
+		    SDL_Delay( (int)( ( 1/(float)FPS_CAP - tdelta ) * 1000 ) );
+        }
+        //SDL_Delay( (int) ( 3 * pow( SLOW_DOWN, 2 ) ) ); // recommend to smooth things out
 		//msg = TTF_RenderText_Blended( font, formatter.str().c_str(), textColor );
 		//apply_surface( 400, 400, msg, screen );
 
 		SDL_Flip( screen );
 		if( lc++ % FPSFPS == 0 ) {
-			formatter.str( "FPS: " );
-			float fps = 1.0 / tdelta;
+			formatter.str( "" );
+			float fps = 1.0f / (float) tdelta;
 			//printf_debug( "FPS: %.4f\n", fps );
-			formatter << fps;
+			formatter << "FPS: " << fps;
 		}
 	}
 	SDL_Quit();
