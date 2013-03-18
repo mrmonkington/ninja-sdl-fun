@@ -935,7 +935,13 @@ int main( int argc, char **argv ) {
         //SDL_Rect player_rect = player.frames[ player.current_animation[ player.frame_count ] ].rect;
         SDL_Rect player_rect = player.getCurrentFrame();;
 
-		apply_sprite( (int)player.x - vp.x, (int)(player.y) - vp.y, player.sprite_sheet, &player_rect, screen );
+		apply_sprite(
+            (int)player.x - vp.x,
+            (int)player.y - vp.y,
+            player.sprite_sheet,
+            &player_rect,
+            screen
+        );
 
         // use up remaining ticks before frame is done
         //if( tdelta < (1.0/(float)FPS_CAP) ) {

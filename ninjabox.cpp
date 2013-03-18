@@ -28,29 +28,29 @@ inline void printf_debug( const char* f, ... ) {
 const int SCREEN_WIDTH = 640;
 const int SCREEN_HEIGHT = 480;
 const int SCREEN_BPP = 32;
-const int TW = 32;
-const int TH = 32;
 const int SCREEN_FLAGS = SDL_HWSURFACE | SDL_DOUBLEBUF | SDL_ASYNCBLIT;// | SDL_FULLSCREEN;
 const int FPSFPS = 10; // rate at which FPS display is updated
-const float GRAVITY = 3000.0; //pixels per second per second
+const float GRAVITY = 9.81f; // metres per second per second
 const int FPS_CAP = 60; // if FLIP isn't vsynced, limit to this so we don't waste cycles
 const float SLOW_DOWN = 1.0;
 // pixels per metre
-const float SCALE = 100; // pixels per metre
+const float SCALE = 40; // pixels per metre
 
 Tmx::Map *map;
 std::map<std::string, SDL_Surface*> tilesets;
 
 // SDL Stuff
 
-SDL_Surface *screen = NULL;
-
 // physics stuff
 
 inline int to_screen( float c ) {
-    return (int) ( c * SCALE );
+    return (int)(c * SCALE);
+}
+inline float to_world( int c ) {
+    return (float)c / SCALE;
 }
 
+// global current world
 b2World* world;
 
 // ********** global funcs ************
@@ -116,17 +116,17 @@ void apply_sprite( int x, int y, SDL_Surface *source, SDL_Rect *frame, SDL_Surfa
 	offset.y = y;
 	SDL_BlitSurface( source, frame, destination, &offset );
 }
-void apply_tile( int sx, int sy, SDL_Surface *source, int dx, int dy, SDL_Surface *destination ) {
+void apply_tile( int tw, int th, int sx, int sy, SDL_Surface *source, int dx, int dy, SDL_Surface *destination ) {
 	SDL_Rect soffset;
 	SDL_Rect doffset;
 	soffset.x = sx;
 	soffset.y = sy;
-	soffset.w = TW;
-	soffset.h = TH;
+	soffset.w = tw;
+	soffset.h = th;
 	doffset.x = dx;
 	doffset.y = dy;
-	doffset.w = TW;
-	doffset.h = TH;
+	doffset.w = tw;
+	doffset.h = th;
 	SDL_BlitSurface( source, &soffset, destination, &doffset );
 }
 void apply_surface( int x, int y, SDL_Surface *source, SDL_Surface *destination ) {
@@ -229,9 +229,9 @@ const Tmx::Tile *get_tile_by_coords( int x, int y ) {
 }
 
 
-SDL_Surface *init_background() {
+SDL_Surface *init_background( Tmx::Map *map ) {
     // create surface for background using default bit masks
-    return SDL_CreateRGBSurface( SDL_HWSURFACE, map->GetWidth() * TW, map->GetHeight() * TH, 32, 0, 0, 0, 0 );
+    return SDL_CreateRGBSurface( SDL_HWSURFACE, map->GetWidth() * map->GetTileWidth(), map->GetHeight() * map->GetTileHeight(), 32, 0, 0, 0, 0 );
 }
 
 int debug_render_map( int v_x, int v_y, SDL_Surface *destination ) {
@@ -292,9 +292,11 @@ int render_map( int v_x, int v_y, SDL_Surface *destination ) {
                     int col = ( tile_index % tileset_cols );
                     int row = ( tile_index / tileset_cols );
                     apply_tile(
+                        tileset->GetTileWidth(),
+                        tileset->GetTileHeight(),
                         col * ( tileset->GetSpacing() + tileset->GetTileWidth() ) + tileset->GetMargin(),
                         row * ( tileset->GetSpacing() + tileset->GetTileHeight() ) + tileset->GetMargin(),
-                        tilesets[ tileset->GetImage()->GetSource() ], x * TW, y * TH, destination
+                        tilesets[ tileset->GetImage()->GetSource() ], x * tileset->GetTileWidth(), y * tileset->GetTileHeight(), destination
                     );
                     //we only really care about the top tile for now
                     break;
@@ -393,10 +395,16 @@ class Sprite {
 	    float y;
         Sprite();
         virtual ~Sprite();
+
+        // animation
         SDL_Surface *sprite_sheet;
-        //struct sprite_frame *frames;
         int current_animation;
         struct animation *animations;
+        int frame_count;
+        float last_frame_timer;
+        float frame_timer;
+
+
 };
 Sprite::Sprite() {
     x = 0.0;
@@ -407,19 +415,13 @@ Sprite::~Sprite() {
 }
 
 
-class NinjaPlayer: public Sprite {
+class Player: public Sprite {
 	public:
         const static int RUN_LEFT = 0;
         const static int RUN_RIGHT = 1;
         const static int STAND_LEFT = 2;
         const static int STAND_RIGHT = 3;
 
-        int frame_count;
-        float last_frame_timer;
-        float frame_timer;
-
-        //float dx;
-        //float dy;
         float jump_dy; // -900.0// initial jump velocity
         float run_ddx; //3000.0; // p/s^2
 
@@ -431,8 +433,8 @@ class NinjaPlayer: public Sprite {
         int jump_start;
         int jump_power_time; // ms
 
-        NinjaPlayer();
-        virtual ~NinjaPlayer();
+        Player();
+        virtual ~Player();
 
         void animate( float tdelta );
 
@@ -477,15 +479,16 @@ class NinjaPlayer: public Sprite {
 
 };
 
-int NinjaPlayer::getScreenX() {
-    return (int)( body->GetPosition().x * SCALE ) - (fr_w/2);
+//world coords are centre of object
+int Player::getScreenX() {
+    return to_screen( body->GetPosition().x ) - (fr_w/2);
 }
-int NinjaPlayer::getScreenY() {
-    return (int)( body->GetPosition().y * SCALE ) - (fr_h/2);
+int Player::getScreenY() {
+    return to_screen( body->GetPosition().y ) - (fr_h/2);
 }
 
 
-NinjaPlayer::NinjaPlayer() {
+Player::Player() {
     frame_count = 0;
     last_frame_timer = 0.0;
     frame_timer = 0.0;
@@ -551,10 +554,10 @@ NinjaPlayer::NinjaPlayer() {
     fixtureDef.shape = &dynamicBox;
     fixtureDef.density = 100.0f; //300kg/m3
     fixtureDef.friction = 0.5f;
-    fixtureDef.restitution = 0.00f;
+    fixtureDef.restitution = 0.10f;
 
     b2PolygonShape floorSensorShape;
-    floorSensorShape.SetAsBox(2.0f/SCALE, 2.0f/SCALE, b2Vec2(0.0f, (float)fr_h/SCALE/2.0f), 0.0f );
+    floorSensorShape.SetAsBox(2.0f/SCALE, 2.0f/SCALE, b2Vec2(-0.1f, (float)(fr_h+1)/SCALE/2.0f), 0.0f );
 
     b2FixtureDef floorSensorDef;
     floorSensorDef.isSensor = true;
@@ -564,25 +567,25 @@ NinjaPlayer::NinjaPlayer() {
     floorSensor = body->CreateFixture(&floorSensorDef);
     body->CreateFixture(&fixtureDef);
 }
-void NinjaPlayer::setPosition( float x, float y ) {
+void Player::setPosition( float x, float y ) {
     body->SetTransform(b2Vec2(x/SCALE, y/SCALE),0.0);
 }
 
-NinjaPlayer::~NinjaPlayer() {
+Player::~Player() {
     delete animations[RUN_LEFT].frames;
     delete animations[RUN_RIGHT].frames;
     delete animations;
 	SDL_FreeSurface( sprite_sheet );
 }
 // get pixel vel updown
-float NinjaPlayer::dy() {
+float Player::dy() {
     return body->GetLinearVelocity().y * SCALE;
 }
 // get pixel vel sideways
-float NinjaPlayer::dx() {
+float Player::dx() {
     return body->GetLinearVelocity().x * SCALE;
 }
-void NinjaPlayer::animate( float tdelta ) {
+void Player::animate( float tdelta ) {
     if( dx() > 0.1 ) {
         current_animation = RUN_RIGHT;
     } else if( dx() < -0.1 ) {
@@ -605,7 +608,7 @@ void NinjaPlayer::animate( float tdelta ) {
         }
     }
 }
-void NinjaPlayer::updateKinematics( float tdelta ) {
+void Player::updateKinematics( float tdelta ) {
     if( dx() < -1.0 * top_speed ) {
         //dx() = -1.0 * top_speed;
     }
@@ -615,18 +618,18 @@ void NinjaPlayer::updateKinematics( float tdelta ) {
     x = x + tdelta * dx();
     y = y + tdelta * dy();
 }
-void NinjaPlayer::run() {
+void Player::run() {
     top_speed = runspeed;
 }
-void NinjaPlayer::walk() {
+void Player::walk() {
     top_speed = walkspeed;
 }
-SDL_Rect NinjaPlayer::getCurrentFrame() {
+SDL_Rect Player::getCurrentFrame() {
     return animations[ current_animation ].frames[ frame_count ].rect;    
 }
 // floor = last place you were standing
-//void NinjaPlayer::jump( int time, int floor_left, int floor_right ) {
-void NinjaPlayer::jump( int time, float dt ) {
+//void Player::jump( int time, int floor_left, int floor_right ) {
+void Player::jump( int time, float dt ) {
     if( jump_powering == true ) {
         if( time >= jump_start + jump_power_time ) {
             // finish jump power phase
@@ -638,7 +641,10 @@ void NinjaPlayer::jump( int time, float dt ) {
             printf_debug( "jump float\n" );
             // applying impulses allows for a 'constant energy' appoach
             // sum of dt's should be <= jump_power_time
-            body->ApplyLinearImpulse( b2Vec2( 0, last_jump_impulse * dt * 10), body->GetWorldCenter() );
+            body->ApplyLinearImpulse(
+                b2Vec2( 0, last_jump_impulse * dt * 10),
+                body->GetWorldCenter()
+            );
         }
     //} else if( ybottom() == floor_left || ybottom() == floor_right ) {
     } else if( onFloor ) {
@@ -648,24 +654,27 @@ void NinjaPlayer::jump( int time, float dt ) {
         //b2Vec2 vel = body->GetLinearVelocity();
         float vel_change = jump_dy/SCALE;// - vel.y;
         last_jump_impulse = body->GetMass() * vel_change;
-        body->ApplyLinearImpulse( b2Vec2( 0, last_jump_impulse), body->GetWorldCenter() );
+        body->ApplyLinearImpulse(
+            b2Vec2( 0, last_jump_impulse),
+            body->GetWorldCenter()
+        );
         jump_powering = true;
         jump_start = time;
     }
 }
-void NinjaPlayer::left( float tdelta ) {
+void Player::left( float tdelta ) {
     b2Vec2 vel = body->GetLinearVelocity();
     float vel_change = -1.0f * top_speed/SCALE - vel.x;
     float impulse = body->GetMass() * vel_change / 10;
     body->ApplyLinearImpulse( b2Vec2( impulse, 0), body->GetWorldCenter() );
 }
-void NinjaPlayer::right( float tdelta ) {
+void Player::right( float tdelta ) {
     b2Vec2 vel = body->GetLinearVelocity();
     float vel_change = top_speed/SCALE - vel.x;
     float impulse = body->GetMass() * vel_change / 10;
     body->ApplyLinearImpulse( b2Vec2( impulse, 0), body->GetWorldCenter() );
 }
-void NinjaPlayer::halt( float tdelta ) {
+void Player::halt( float tdelta ) {
     b2Vec2 vel = body->GetLinearVelocity();
     float vel_change = 0.0f - vel.x;
     float impulse = body->GetMass() * vel_change / 10;
@@ -674,23 +683,28 @@ void NinjaPlayer::halt( float tdelta ) {
 
 class PlayerContactListener : public b2ContactListener {
 public:
-    NinjaPlayer *player;
+    Player *player;
     int numFootContacts;
-    PlayerContactListener( NinjaPlayer *_player ) {
+    PlayerContactListener( Player *_player ) {
         numFootContacts = 0;
         player = _player;
     }
     void BeginContact(b2Contact* contact) {
+
+        printf_debug( "contact" );
         //check if fixture A was the foot sensor
         void* fixtureUserData = contact->GetFixtureA()->GetUserData();
-        if ( (NinjaPlayer *)fixtureUserData == player ) {
+        if ( (Player *)fixtureUserData == player ) {
+            printf_debug( "A" );
             numFootContacts++;
         }
         //check if fixture B was the foot sensor
         fixtureUserData = contact->GetFixtureB()->GetUserData();
-        if ( (NinjaPlayer *)fixtureUserData == player ) {
+        if ( (Player *)fixtureUserData == player ) {
+            printf_debug( "B" );
             numFootContacts++;
         }
+        printf_debug( " = %i\n", numFootContacts );
         if ( numFootContacts > 0 ) {
             player->onFloor = true;
         } else {
@@ -700,16 +714,20 @@ public:
     }
 
     void EndContact(b2Contact* contact) {
+        printf_debug( "endcontact" );
         //check if fixture A was the foot sensor
         void* fixtureUserData = contact->GetFixtureA()->GetUserData();
-        if ( (NinjaPlayer *)fixtureUserData == player ) {
+        if ( (Player *)fixtureUserData == player ) {
+            printf_debug( "A" );
             numFootContacts--;
         }
         //check if fixture B was the foot sensor
         fixtureUserData = contact->GetFixtureB()->GetUserData();
-        if ( (NinjaPlayer *)fixtureUserData == player ) {
+        if ( (Player *)fixtureUserData == player ) {
+            printf_debug( "B" );
             numFootContacts--;
         }
+        printf_debug( " = %i\n", numFootContacts );
         if ( numFootContacts > 0 ) {
             player->onFloor = true;
         } else {
@@ -721,8 +739,9 @@ public:
 // ***************** entry point *******************
 
 int main( int argc, char **argv ) {
+    SDL_Surface *screen = NULL;
 
-    b2Vec2 gravity(0.0f, 9.81f);
+    b2Vec2 gravity(0.0f, GRAVITY);
     bool doSleep = true;
     world = new b2World(gravity, doSleep);
 
@@ -761,8 +780,7 @@ int main( int argc, char **argv ) {
 
 	font = TTF_OpenFont( "/usr/share/fonts/truetype/ttf-dejavu/DejaVuSans-Bold.ttf", 16 );
 
-
-    background = init_background();
+    background = init_background( map );
     render_map( 0, 0, background );
     debug_render_map( 0, 0, background );
     build_map();
@@ -774,7 +792,7 @@ int main( int argc, char **argv ) {
 	int lc = 0;
 	float tdelta = 0;
 
-    NinjaPlayer player = NinjaPlayer();
+    Player player = Player();
     player.setPosition( 300.0, 200.0 );
 
     PlayerContactListener *clistener = new PlayerContactListener( &player );
@@ -794,11 +812,11 @@ int main( int argc, char **argv ) {
 		last_time = time;
 
         world->Step(tdelta, velocityIterations, positionIterations);
-        printf_debug( "step" );
+        //printf_debug( "step" );
         b2Vec2 position = player.body->GetPosition();
         float32 angle = player.body->GetAngle();
-        printf_debug("%4.2f %4.2f %4.2f\n", position.x, position.y, angle);
-        printf_debug("%i %i\n", to_screen(position.x), to_screen(position.y));
+        //printf_debug("%4.2f %4.2f %4.2f\n", position.x, position.y, angle);
+        //printf_debug("%i %i\n", to_screen(position.x), to_screen(position.y));
 		
 		if( SDL_PollEvent( &event ) ) {
 			if( event.type == SDL_KEYDOWN ) {
@@ -825,10 +843,9 @@ int main( int argc, char **argv ) {
 		if( keystates[ SDLK_UP ] ) {
 		    player.jump( time, tdelta );
 		}
-        //if( player.onFloor ) {
-        //}
-
-        //player.dy += tdelta * GRAVITY;
+        if( player.onFloor ) {
+            printf_debug( "On floor \n" );
+        }
 
         
 		if( keystates[ SDLK_LEFT ] ) {
@@ -872,6 +889,7 @@ int main( int argc, char **argv ) {
 			formatter << "FPS: " << fps;
 		}
 	}
+    SDL_FreeSurface( background );
 	SDL_Quit();
 	delete map;
 	return 0;
