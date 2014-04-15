@@ -1,6 +1,6 @@
 #testsources = test1.cpp TMXLoader.cpp base64.cpp
 CPPFLAGS=-std=c++0x -DDEBUG -I../tmx-parser-read-only -I/usr/local/include/
-OBJS=-L../tmx-parser-read-only -L/usr/local/lib -ltmxparser -lSDL -lSDL_image -lSDL_ttf -ltinyxml
+OBJS=-L../tmx-parser-read-only -L/usr/local/lib -ltmxparser -lSDL -lSDL_image -lSDL_ttf -ltinyxml -lz
 #OBJS=-lSDL -lSDL_image -lSDL_ttf -ltinyxml
 INCS="-ITmxParser"
 

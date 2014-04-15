@@ -9,7 +9,7 @@
 #include <vector>
 #include <stdarg.h>
 
-#include <Box2D.h>
+#include <Box2D/Box2D.h>
 
 #include "TmxParser/Tmx.h"
 
@@ -17,7 +17,7 @@
 inline void printf_debug( const char* f, ... ) {
     va_list argp;
     va_start( argp, f );
-    vfprintf( stderr, f, argp );
+    //vfprintf( stderr, f, argp );
 }
 #else
 inline void printf_debug( const char* f, ... ) {
@@ -100,81 +100,81 @@ SDL_Rect calculate_viewport( int x, int y, int w, int h ) {
 }
 
 SDL_Surface *load_image( std::string filename ) {
-	SDL_Surface *loadedImage = NULL;
-	SDL_Surface *optimisedImage = NULL;
-	loadedImage = IMG_Load( filename.c_str() );
-	if( loadedImage != NULL ) {
+    SDL_Surface *loadedImage = NULL;
+    SDL_Surface *optimisedImage = NULL;
+    loadedImage = IMG_Load( filename.c_str() );
+    if( loadedImage != NULL ) {
         return loadedImage;
-		optimisedImage = SDL_DisplayFormatAlpha( loadedImage );
-		SDL_FreeSurface( loadedImage );
-	}
-	return optimisedImage;
+        optimisedImage = SDL_DisplayFormatAlpha( loadedImage );
+        SDL_FreeSurface( loadedImage );
+    }
+    return optimisedImage;
 }
 void apply_sprite( int x, int y, SDL_Surface *source, SDL_Rect *frame, SDL_Surface *destination ) {
-	SDL_Rect offset;
-	offset.x = x;
-	offset.y = y;
-	SDL_BlitSurface( source, frame, destination, &offset );
+    SDL_Rect offset;
+    offset.x = x;
+    offset.y = y;
+    SDL_BlitSurface( source, frame, destination, &offset );
 }
 void apply_tile( int tw, int th, int sx, int sy, SDL_Surface *source, int dx, int dy, SDL_Surface *destination ) {
-	SDL_Rect soffset;
-	SDL_Rect doffset;
-	soffset.x = sx;
-	soffset.y = sy;
-	soffset.w = tw;
-	soffset.h = th;
-	doffset.x = dx;
-	doffset.y = dy;
-	doffset.w = tw;
-	doffset.h = th;
-	SDL_BlitSurface( source, &soffset, destination, &doffset );
+    SDL_Rect soffset;
+    SDL_Rect doffset;
+    soffset.x = sx;
+    soffset.y = sy;
+    soffset.w = tw;
+    soffset.h = th;
+    doffset.x = dx;
+    doffset.y = dy;
+    doffset.w = tw;
+    doffset.h = th;
+    SDL_BlitSurface( source, &soffset, destination, &doffset );
 }
 void apply_surface( int x, int y, SDL_Surface *source, SDL_Surface *destination ) {
-	SDL_Rect offset;
-	offset.x = x;
-	offset.y = y;
-	SDL_BlitSurface( source, NULL, destination, &offset );
+    SDL_Rect offset;
+    offset.x = x;
+    offset.y = y;
+    SDL_BlitSurface( source, NULL, destination, &offset );
 }
 void clear_surface( SDL_Surface *surf, Uint32 col ) {
-	SDL_FillRect( surf, NULL, col );
+    SDL_FillRect( surf, NULL, col );
 }
 void apply_tiling_surface( int x, int y, int width, int x_offset, SDL_Surface *source, SDL_Surface *destination ) {
-	SDL_Rect offset;
-	offset.x = x;
-	offset.y = y;
-	SDL_Rect srcoff;
-	srcoff.x = x_offset;
-	srcoff.y = 0;
-	srcoff.h = source->h;
-	if( x_offset + width > source->w ) {
-		srcoff.w = source->w - x_offset;
-		SDL_BlitSurface( source, &srcoff, destination, &offset );
-		offset.x += srcoff.w;
-		srcoff.x = 0;
-		srcoff.w = width - srcoff.w;
-		SDL_BlitSurface( source, &srcoff, destination, &offset );
-	} else {
-		srcoff.w = width;
-		SDL_BlitSurface( source, &srcoff, destination, &offset );
-	}
+    SDL_Rect offset;
+    offset.x = x;
+    offset.y = y;
+    SDL_Rect srcoff;
+    srcoff.x = x_offset;
+    srcoff.y = 0;
+    srcoff.h = source->h;
+    if( x_offset + width > source->w ) {
+        srcoff.w = source->w - x_offset;
+        SDL_BlitSurface( source, &srcoff, destination, &offset );
+        offset.x += srcoff.w;
+        srcoff.x = 0;
+        srcoff.w = width - srcoff.w;
+        SDL_BlitSurface( source, &srcoff, destination, &offset );
+    } else {
+        srcoff.w = width;
+        SDL_BlitSurface( source, &srcoff, destination, &offset );
+    }
 }
 
 void load_map() {
     map = new Tmx::Map();
-	map->ParseFile("map/platformtest.tmx");
+    map->ParseFile("map/platformtest.tmx");
 
-	if (map->HasError()) {
+    if (map->HasError()) {
         //printf_debug("error code: %d\n", map->GetErrorCode());
-	    //printf_debug("error text: %s\n", map->GetErrorText().c_str());
-		system("PAUSE");
+        //printf_debug("error text: %s\n", map->GetErrorText().c_str());
+        system("PAUSE");
         exit(1);
-	}
+    }
 
-	for (int i = 0; i < map->GetNumTilesets(); ++i) {
-		// Get a tileset.
-		const Tmx::Tileset *tileset = map->GetTileset(i);
-		tilesets[ tileset->GetImage()->GetSource() ] = load_image( ( "map/" + tileset->GetImage()->GetSource() ).c_str() );
-	}
+    for (int i = 0; i < map->GetNumTilesets(); ++i) {
+        // Get a tileset.
+        const Tmx::Tileset *tileset = map->GetTileset(i);
+        tilesets[ tileset->GetImage()->GetSource() ] = load_image( ( "map/" + tileset->GetImage()->GetSource() ).c_str() );
+    }
 
 }
 
@@ -261,7 +261,7 @@ int render_map( int v_x, int v_y, SDL_Surface *destination ) {
                 //Tmx::Tile *tile = *(tileset->GetTiles().begin());
                 //tile_is_solid( tile )
 
-	// Iterate through the layers.
+    // Iterate through the layers.
     // test std::min( 0, 4 );
 
     for (int y = 0; y < map->GetHeight(); ++y) {
@@ -305,7 +305,7 @@ int render_map( int v_x, int v_y, SDL_Surface *destination ) {
                 }
             }
         }
-	}
+    }
 
     return 1;
 }
@@ -354,7 +354,7 @@ int build_map() {
                 }
             }
         }
-	}
+    }
     for (int i = 0; i < map->GetNumObjectGroups(); i ++) {
         const Tmx::ObjectGroup *group = map->GetObjectGroup(i);
         for (int j = 0; j < group->GetNumObjects(); j ++) {
@@ -391,8 +391,8 @@ int build_map() {
 
 class Sprite {
     public:
-	    float x;
-	    float y;
+        float x;
+        float y;
         Sprite();
         virtual ~Sprite();
 
@@ -416,7 +416,7 @@ Sprite::~Sprite() {
 
 
 class Player: public Sprite {
-	public:
+    public:
         const static int RUN_LEFT = 0;
         const static int RUN_RIGHT = 1;
         const static int STAND_LEFT = 2;
@@ -510,7 +510,7 @@ Player::Player() {
     jump_powering = false;
     jump_start = 0;
     jump_power_time = 150; // ms
-	sprite_sheet = load_image( "player_2.png" );
+    sprite_sheet = load_image( "player_2.png" );
 
     animations = new animation[4];
     short fr_w = 42;
@@ -575,7 +575,7 @@ Player::~Player() {
     delete animations[RUN_LEFT].frames;
     delete animations[RUN_RIGHT].frames;
     delete animations;
-	SDL_FreeSurface( sprite_sheet );
+    SDL_FreeSurface( sprite_sheet );
 }
 // get pixel vel updown
 float Player::dy() {
@@ -643,7 +643,8 @@ void Player::jump( int time, float dt ) {
             // sum of dt's should be <= jump_power_time
             body->ApplyLinearImpulse(
                 b2Vec2( 0, last_jump_impulse * dt * 10),
-                body->GetWorldCenter()
+                body->GetWorldCenter(),
+                true
             );
         }
     //} else if( ybottom() == floor_left || ybottom() == floor_right ) {
@@ -656,7 +657,8 @@ void Player::jump( int time, float dt ) {
         last_jump_impulse = body->GetMass() * vel_change;
         body->ApplyLinearImpulse(
             b2Vec2( 0, last_jump_impulse),
-            body->GetWorldCenter()
+            body->GetWorldCenter(),
+            true
         );
         jump_powering = true;
         jump_start = time;
@@ -666,19 +668,19 @@ void Player::left( float tdelta ) {
     b2Vec2 vel = body->GetLinearVelocity();
     float vel_change = -1.0f * top_speed/SCALE - vel.x;
     float impulse = body->GetMass() * vel_change / 10;
-    body->ApplyLinearImpulse( b2Vec2( impulse, 0), body->GetWorldCenter() );
+    body->ApplyLinearImpulse( b2Vec2( impulse, 0), body->GetWorldCenter(), true );
 }
 void Player::right( float tdelta ) {
     b2Vec2 vel = body->GetLinearVelocity();
     float vel_change = top_speed/SCALE - vel.x;
     float impulse = body->GetMass() * vel_change / 10;
-    body->ApplyLinearImpulse( b2Vec2( impulse, 0), body->GetWorldCenter() );
+    body->ApplyLinearImpulse( b2Vec2( impulse, 0), body->GetWorldCenter(), true );
 }
 void Player::halt( float tdelta ) {
     b2Vec2 vel = body->GetLinearVelocity();
     float vel_change = 0.0f - vel.x;
     float impulse = body->GetMass() * vel_change / 10;
-    body->ApplyLinearImpulse( b2Vec2( impulse, 0), body->GetWorldCenter() );
+    body->ApplyLinearImpulse( b2Vec2( impulse, 0), body->GetWorldCenter(), true );
 }
 
 class PlayerContactListener : public b2ContactListener {
@@ -742,55 +744,54 @@ int main( int argc, char **argv ) {
     SDL_Surface *screen = NULL;
 
     b2Vec2 gravity(0.0f, GRAVITY);
-    bool doSleep = true;
-    world = new b2World(gravity, doSleep);
+    world = new b2World(gravity);
 
-	//The layers
-	SDL_Surface *message = NULL;
-	SDL_Surface *background = NULL;
+    //The layers
+    SDL_Surface *message = NULL;
+    SDL_Surface *background = NULL;
 
-	SDL_Surface *msg = NULL;
-	SDL_Event event;
+    SDL_Surface *msg = NULL;
+    SDL_Event event;
 
-	bool quit = false;
-	int last_time;
-	int time = 0;
-	std::ostringstream formatter;
+    bool quit = false;
+    int last_time;
+    int time = 0;
+    std::ostringstream formatter;
 
     load_map();
 
-	// for FPS
-	formatter.precision( 5 );
+    // for FPS
+    formatter.precision( 5 );
 
-	TTF_Font *font = NULL;
-	SDL_Color textColor = { 255, 255, 255 };
+    TTF_Font *font = NULL;
+    SDL_Color textColor = { 255, 255, 255 };
 
-	//Start SDL
-	if( SDL_Init( SDL_INIT_EVERYTHING ) == -1 ) {
-		return 1;
-	}
-	if( TTF_Init() == -1 ) {
-		return 3;
-	}
-	screen = SDL_SetVideoMode( SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_BPP, SCREEN_FLAGS );
-	if( screen == NULL ) {
-		return 2;
-	}
-	SDL_WM_SetCaption( "Hello World", NULL );
+    //Start SDL
+    if( SDL_Init( SDL_INIT_EVERYTHING ) == -1 ) {
+        return 1;
+    }
+    if( TTF_Init() == -1 ) {
+        return 3;
+    }
+    screen = SDL_SetVideoMode( SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_BPP, SCREEN_FLAGS );
+    if( screen == NULL ) {
+        return 2;
+    }
+    SDL_WM_SetCaption( "Hello World", NULL );
 
-	font = TTF_OpenFont( "/usr/share/fonts/truetype/ttf-dejavu/DejaVuSans-Bold.ttf", 16 );
+    font = TTF_OpenFont( "/usr/share/fonts/truetype/ttf-dejavu/DejaVuSans-Bold.ttf", 16 );
 
     background = init_background( map );
     render_map( 0, 0, background );
     debug_render_map( 0, 0, background );
     build_map();
 
-	float dynamic_friction = 12.00; // 1/s
-	float static_friction = 12.0; // p/s^2
+    float dynamic_friction = 12.00; // 1/s
+    float static_friction = 12.0; // p/s^2
 
-	// distances are pixels
-	int lc = 0;
-	float tdelta = 0;
+    // distances are pixels
+    int lc = 0;
+    float tdelta = 0;
 
     Player player = Player();
     player.setPosition( 300.0, 200.0 );
@@ -804,12 +805,12 @@ int main( int argc, char **argv ) {
     int32 velocityIterations = 6;
     int32 positionIterations = 2;
 
-	while( !quit ) {
+    while( !quit ) {
 
 
-		time = SDL_GetTicks();
-		tdelta = (float)((time - last_time)/1000.0) / SLOW_DOWN;
-		last_time = time;
+        time = SDL_GetTicks();
+        tdelta = (float)((time - last_time)/1000.0) / SLOW_DOWN;
+        last_time = time;
 
         world->Step(tdelta, velocityIterations, positionIterations);
         //printf_debug( "step" );
@@ -817,42 +818,42 @@ int main( int argc, char **argv ) {
         float32 angle = player.body->GetAngle();
         //printf_debug("%4.2f %4.2f %4.2f\n", position.x, position.y, angle);
         //printf_debug("%i %i\n", to_screen(position.x), to_screen(position.y));
-		
-		if( SDL_PollEvent( &event ) ) {
-			if( event.type == SDL_KEYDOWN ) {
-				switch( event.key.keysym.sym ) {
-					case SDLK_ESCAPE:
-						quit = true;
-						break;
-				}
-			}
-			
-			if( event.type == SDL_QUIT ) {
-				quit = true;
-			}
-		}
-		Uint8 *keystates = SDL_GetKeyState( NULL );
-		//if( keystates[ SDLK_LCTRL ] ) {
-		//	player.run();
-		//} else {
-		//	player.walk();
-		//}
+        
+        if( SDL_PollEvent( &event ) ) {
+            if( event.type == SDL_KEYDOWN ) {
+                switch( event.key.keysym.sym ) {
+                    case SDLK_ESCAPE:
+                        quit = true;
+                        break;
+                }
+            }
+            
+            if( event.type == SDL_QUIT ) {
+                quit = true;
+            }
+        }
+        Uint8 *keystates = SDL_GetKeyState( NULL );
+        //if( keystates[ SDLK_LCTRL ] ) {
+        //    player.run();
+        //} else {
+        //    player.walk();
+        //}
 
         //player.updateKinematics( tdelta );
 
-		if( keystates[ SDLK_UP ] ) {
-		    player.jump( time, tdelta );
-		}
+        if( keystates[ SDLK_UP ] ) {
+            player.jump( time, tdelta );
+        }
         if( player.onFloor ) {
             printf_debug( "On floor \n" );
         }
-
+        formatter.str( "On floor" );
         
-		if( keystates[ SDLK_LEFT ] ) {
+        if( keystates[ SDLK_LEFT ] ) {
             player.left( tdelta );
-		} else if( keystates[ SDLK_RIGHT ] ) {
+        } else if( keystates[ SDLK_RIGHT ] ) {
             player.right( tdelta );
-		} else {
+        } else {
             // supply a halting impule
             player.halt( tdelta );
         }
@@ -860,38 +861,38 @@ int main( int argc, char **argv ) {
         //    //player.right( tdelta );
         //    b2Vec2 push( 0.0f, -1000.0f );
         //    player.body->ApplyForce( push, position );
-		//}
+        //}
 
         player.animate( tdelta );
 
         SDL_Rect vp = calculate_viewport( player.getScreenX(), player.getScreenY(), map->GetWidth() * map->GetTileWidth(), map->GetHeight() * map->GetTileHeight() );
 
-		clear_surface( screen, 0xffffffff );
-		apply_surface( 0-vp.x, 0-vp.y, background, screen );
+        clear_surface( screen, 0xffffffff );
+        apply_surface( 0-vp.x, 0-vp.y, background, screen );
 
         SDL_Rect player_rect = player.getCurrentFrame();
 
-		apply_sprite( player.getScreenX() - vp.x, player.getScreenY() -  vp.y, player.sprite_sheet, &player_rect, screen );
+        apply_sprite( player.getScreenX() - vp.x, player.getScreenY() -  vp.y, player.sprite_sheet, &player_rect, screen );
 
         // use up remaining ticks before frame is done
         if( tdelta < (1.0/(float)FPS_CAP) ) {
-		    SDL_Delay( (int)( ( 1/(float)FPS_CAP - tdelta ) * 1000 ) );
+            SDL_Delay( (int)( ( 1/(float)FPS_CAP - tdelta ) * 1000 ) );
         }
         //SDL_Delay( (int) ( 3 * pow( SLOW_DOWN, 2 ) ) ); // recommend to smooth things out
-		//msg = TTF_RenderText_Blended( font, formatter.str().c_str(), textColor );
-		//apply_surface( 400, 400, msg, screen );
+        msg = TTF_RenderText_Blended( font, formatter.str().c_str(), textColor );
+        apply_surface( 400, 400, msg, screen );
 
-		SDL_Flip( screen );
-		if( lc++ % FPSFPS == 0 ) {
-			formatter.str( "" );
-			float fps = 1.0f / (float) tdelta;
-			//printf_debug( "FPS: %.4f\n", fps );
-			formatter << "FPS: " << fps;
-		}
-	}
+        SDL_Flip( screen );
+        if( lc++ % FPSFPS == 0 ) {
+            formatter.str( "" );
+            float fps = 1.0f / (float) tdelta;
+            //printf_debug( "FPS: %.4f\n", fps );
+            formatter << "FPS: " << fps;
+        }
+    }
     SDL_FreeSurface( background );
-	SDL_Quit();
-	delete map;
-	return 0;
+    SDL_Quit();
+    delete map;
+    return 0;
 }
 
