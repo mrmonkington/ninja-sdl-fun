@@ -17,7 +17,7 @@
 inline void printf_debug( const char* f, ... ) {
     va_list argp;
     va_start( argp, f );
-    //vfprintf( stderr, f, argp );
+    vfprintf( stderr, f, argp );
 }
 #else
 inline void printf_debug( const char* f, ... ) {
@@ -474,6 +474,7 @@ class Player: public Sprite {
         float dx();
         float dy();
 
+        int numFootContacts;
         bool onFloor;
         float last_jump_impulse;
 
@@ -494,6 +495,7 @@ Player::Player() {
     frame_timer = 0.0;
     last_jump_impulse = 0.0;
 
+    numFootContacts = 0;
     onFloor = false;
 
     fr_w = 42;
@@ -566,6 +568,7 @@ Player::Player() {
 
     floorSensor = body->CreateFixture(&floorSensorDef);
     body->CreateFixture(&fixtureDef);
+    body->SetUserData(this);
 }
 void Player::setPosition( float x, float y ) {
     body->SetTransform(b2Vec2(x/SCALE, y/SCALE),0.0);
@@ -686,28 +689,26 @@ void Player::halt( float tdelta ) {
 class PlayerContactListener : public b2ContactListener {
 public:
     Player *player;
-    int numFootContacts;
     PlayerContactListener( Player *_player ) {
-        numFootContacts = 0;
         player = _player;
     }
     void BeginContact(b2Contact* contact) {
 
         printf_debug( "contact" );
         //check if fixture A was the foot sensor
-        void* fixtureUserData = contact->GetFixtureA()->GetUserData();
+        void* fixtureUserData = contact->GetFixtureA()->GetBody()->GetUserData();
         if ( (Player *)fixtureUserData == player ) {
             printf_debug( "A" );
-            numFootContacts++;
+            player->numFootContacts++;
         }
         //check if fixture B was the foot sensor
-        fixtureUserData = contact->GetFixtureB()->GetUserData();
+        fixtureUserData = contact->GetFixtureB()->GetBody()->GetUserData();
         if ( (Player *)fixtureUserData == player ) {
             printf_debug( "B" );
-            numFootContacts++;
+            player->numFootContacts++;
         }
-        printf_debug( " = %i\n", numFootContacts );
-        if ( numFootContacts > 0 ) {
+        printf_debug( " = %i\n", player->numFootContacts );
+        if ( player->numFootContacts > 0 ) {
             player->onFloor = true;
         } else {
             player->onFloor = false;
@@ -718,19 +719,19 @@ public:
     void EndContact(b2Contact* contact) {
         printf_debug( "endcontact" );
         //check if fixture A was the foot sensor
-        void* fixtureUserData = contact->GetFixtureA()->GetUserData();
+        void* fixtureUserData = contact->GetFixtureA()->GetBody()->GetUserData();
         if ( (Player *)fixtureUserData == player ) {
             printf_debug( "A" );
-            numFootContacts--;
+            player->numFootContacts--;
         }
         //check if fixture B was the foot sensor
-        fixtureUserData = contact->GetFixtureB()->GetUserData();
+        fixtureUserData = contact->GetFixtureB()->GetBody()->GetUserData();
         if ( (Player *)fixtureUserData == player ) {
             printf_debug( "B" );
-            numFootContacts--;
+            player->numFootContacts--;
         }
-        printf_debug( " = %i\n", numFootContacts );
-        if ( numFootContacts > 0 ) {
+        printf_debug( " = %i\n", player->numFootContacts );
+        if ( player->numFootContacts > 0 ) {
             player->onFloor = true;
         } else {
             player->onFloor = false;
@@ -807,6 +808,7 @@ int main( int argc, char **argv ) {
 
     while( !quit ) {
 
+        formatter.str( "" );
 
         time = SDL_GetTicks();
         tdelta = (float)((time - last_time)/1000.0) / SLOW_DOWN;
@@ -845,9 +847,9 @@ int main( int argc, char **argv ) {
             player.jump( time, tdelta );
         }
         if( player.onFloor ) {
-            printf_debug( "On floor \n" );
+            //printf_debug( "On floor \n" );
+            formatter.str( "On floor" );
         }
-        formatter.str( "On floor" );
         
         if( keystates[ SDLK_LEFT ] ) {
             player.left( tdelta );
@@ -884,10 +886,9 @@ int main( int argc, char **argv ) {
 
         SDL_Flip( screen );
         if( lc++ % FPSFPS == 0 ) {
-            formatter.str( "" );
             float fps = 1.0f / (float) tdelta;
             //printf_debug( "FPS: %.4f\n", fps );
-            formatter << "FPS: " << fps;
+            //formatter << "FPS: " << fps;
         }
     }
     SDL_FreeSurface( background );
