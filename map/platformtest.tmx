@@ -145,7 +145,7 @@
 </data>
  </layer>
  <objectgroup name="Edges" width="50" height="50">
-  <object x="640" y="64">
+  <object name="edge" type="polyline" x="640" y="64">
    <polyline points="-32,-32 928,-32 928,1024 288,1024 -320,1472 -608,1472 -608,64 -32,64 -32,-32"/>
   </object>
  </objectgroup>

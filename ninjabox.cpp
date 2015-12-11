@@ -11,7 +11,7 @@
 
 #include <Box2D/Box2D.h>
 
-#include "TmxParser/Tmx.h"
+#include <tmxparser/Tmx.h>
 
 #ifdef DEBUG
 inline void printf_debug( const char* f, ... ) {
@@ -180,7 +180,7 @@ void load_map() {
 
 
 int tile_is_solid( const Tmx::Tile *tile ) {
-    return ( tile->GetProperties().GetLiteralProperty( "solid" ) == "1" );
+    return ( tile->GetProperties().GetIntProperty( "solid" ) == 1 );
 }
 
 int level_is_solid_here( const Tmx::Layer *layer, int col, int row ) {
@@ -356,9 +356,12 @@ int build_map() {
         }
     }
     for (int i = 0; i < map->GetNumObjectGroups(); i ++) {
+        printf_debug( "obj %i\n", i );
         const Tmx::ObjectGroup *group = map->GetObjectGroup(i);
+        printf_debug( "num objs %i\n", group->GetNumObjects() );
         for (int j = 0; j < group->GetNumObjects(); j ++) {
             const Tmx::Object *ob = group->GetObject(j);
+            printf_debug( "type %s\n", (ob->GetType()).c_str() );
             if( ob->GetType().compare("polyline") == 0 ) {
                 const Tmx::Polyline *pl = ob->GetPolyline();
                 int x = ob->GetX();
@@ -521,22 +524,22 @@ Player::Player() {
     animations[RUN_RIGHT].frames = new struct sprite_frame[30];
     animations[RUN_RIGHT].count = 30;
     for( short f_c = 0; f_c < 30; f_c ++ ) {
-        animations[RUN_RIGHT].frames[ f_c ] = { { (short) (f_c * fr_w), 0, fr_w, fr_h }, 0.01 };
+        animations[RUN_RIGHT].frames[ f_c ] = { { (int) (f_c * fr_w), 0, fr_w, fr_h }, 0.01 };
     }
     animations[RUN_LEFT].frames = new struct sprite_frame[30];
     animations[RUN_LEFT].count = 30;
     for( short f_c = 0; f_c < 30; f_c ++ ) {
-        animations[RUN_LEFT].frames[ f_c ] = { { (short) (f_c * fr_w), fr_h, fr_w, fr_h }, 0.01 };
+        animations[RUN_LEFT].frames[ f_c ] = { { (int) (f_c * fr_w), fr_h, fr_w, fr_h }, 0.01 };
     }
     animations[STAND_RIGHT].frames = new struct sprite_frame[30];
     animations[STAND_RIGHT].count = 1;
     for( short f_c = 0; f_c < 1; f_c ++ ) {
-        animations[STAND_RIGHT].frames[ f_c ] = { { (short) (f_c * fr_w), (short)(fr_h * 2), fr_w, fr_h }, 0.01 };
+        animations[STAND_RIGHT].frames[ f_c ] = { { (int) (f_c * fr_w), (int)(fr_h * 2), fr_w, fr_h }, 0.01 };
     }
     animations[STAND_LEFT].frames = new struct sprite_frame[30];
     animations[STAND_LEFT].count = 1;
     for( short f_c = 0; f_c < 1; f_c ++ ) {
-        animations[STAND_LEFT].frames[ f_c ] = { { (short) (f_c * fr_w), (short)(fr_h * 3), fr_w, fr_h }, 0.01 };
+        animations[STAND_LEFT].frames[ f_c ] = { { (int) (f_c * fr_w), (int)(fr_h * 3), fr_w, fr_h }, 0.01 };
     }
     current_animation = RUN_LEFT;
     top_speed = runspeed;
@@ -780,7 +783,7 @@ int main( int argc, char **argv ) {
     }
     SDL_WM_SetCaption( "Hello World", NULL );
 
-    font = TTF_OpenFont( "/usr/share/fonts/truetype/ttf-dejavu/DejaVuSans-Bold.ttf", 16 );
+    font = TTF_OpenFont( "dejavu/DejaVuSans-Bold.ttf", 16 );
 
     background = init_background( map );
     render_map( 0, 0, background );
